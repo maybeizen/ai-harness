@@ -1,110 +1,137 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { Check, Copy, Pencil, Pin, Trash2 } from '@lucide/vue';
+import { ref } from 'vue';
+import { ChevronRight, MoreHorizontal, Pin, Trash2, Upload } from '@lucide/vue';
 import type { ConversationSummary } from '@harness/contracts';
+import { useSettingsStore } from '../../stores/settings';
 import { useChatStore } from '../../stores/chat';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '../ui/dialog';
+import ConversationDialogs from './ConversationDialogs.vue';
 const emit = defineEmits<{ selected: [] }>();
 const chat = useChatStore();
-const query = ref('');
+const preferences = useSettingsStore();
 const editing = ref<ConversationSummary | null>(null);
 const deleting = ref<ConversationSummary | null>(null);
-const title = ref('');
-const busy = ref(false);
-const copied = ref<string | null>(null);
-const filtered = computed(() =>
-  [...chat.conversations]
-    .filter((item) =>
-      item.title.toLocaleLowerCase().includes(query.value.toLocaleLowerCase()),
-    )
-    .sort(
-      (a, b) =>
-        Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt,
-    ),
-);
+const retaining = ref(false);
+const menu = ref<string | null>(null);
+function toggleConversations() {
+  void preferences.patch({
+    sidebarGroups: {
+      ...preferences.settings.sidebarGroups,
+      conversations: !preferences.settings.sidebarGroups.conversations,
+    },
+  });
+}
+function search(value: string | number) {
+  if (!preferences.settings.sidebarGroups.conversations)
+    void preferences.patch({
+      sidebarGroups: {
+        ...preferences.settings.sidebarGroups,
+        conversations: true,
+      },
+    });
+  void chat.searchHistory(String(value)).catch(() => undefined);
+}
+function more() {
+  void chat.loadMoreHistory().catch(() => undefined);
+}
 async function select(id: string) {
   await chat.selectConversation(id);
+  if (chat.conversationId === id)
+    await preferences.patch({ selectedMode: 'ask' });
   emit('selected');
 }
 function rename(item: ConversationSummary) {
-  title.value = item.title;
   editing.value = item;
 }
-async function save() {
-  if (!editing.value || !title.value.trim() || busy.value) return;
-  busy.value = true;
-  if (
-    await chat.updateConversation(
-      editing.value.id,
-      title.value,
-      editing.value.pinned,
-    )
-  )
-    editing.value = null;
-  busy.value = false;
+async function exportFile(id: string) {
+  menu.value = null;
+  await chat.exportConversation(id);
 }
-async function remove() {
-  if (!deleting.value || busy.value) return;
-  busy.value = true;
-  if (await chat.deleteConversation(deleting.value.id)) deleting.value = null;
-  busy.value = false;
-}
-async function copyExport(id: string) {
-  if (await chat.exportConversation(id)) copied.value = id;
+function chooseImport(event: Event) {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  const file = input.files?.[0];
+  input.value = '';
+  if (file) void chat.importConversation(file);
 }
 </script>
 <template>
   <section aria-label="Conversation history" class="min-w-0 px-2">
     <div class="mb-3 px-1">
-      <label
-        for="conversation-search"
-        class="mb-2 block text-xs font-medium text-muted-foreground"
-        >Conversations</label
-      >
+      <div class="mb-2 flex items-center gap-1">
+        <button
+          type="button"
+          class="flex min-w-0 flex-1 items-center gap-1 text-xs font-medium text-muted-foreground"
+          :aria-expanded="preferences.settings.sidebarGroups.conversations"
+          @click="toggleConversations"
+        >
+          <ChevronRight
+            class="size-3.5 transition-transform"
+            :class="
+              preferences.settings.sidebarGroups.conversations
+                ? 'rotate-90'
+                : ''
+            "
+          />Conversations
+        </button>
+        <label
+          class="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <span class="sr-only">Import conversation</span>
+          <input
+            class="sr-only"
+            type="file"
+            accept="application/json,.json"
+            @change="chooseImport"
+          /><Upload class="size-3.5" aria-hidden="true" />
+        </label>
+      </div>
       <Input
         id="conversation-search"
-        v-model="query"
+        aria-label="Search conversations"
+        :model-value="chat.historyQuery"
+        maxlength="200"
         type="search"
         placeholder="Search conversations…"
         class="h-8 bg-background/40 text-xs"
+        @update:model-value="search"
       />
     </div>
     <p
-      v-if="chat.historyLoading"
+      v-if="
+        chat.historyLoading ||
+        (chat.historyPaging && !chat.conversations.length)
+      "
       role="status"
       class="px-2 py-3 text-xs text-muted-foreground"
     >
       Loading conversations…
     </p>
     <p
-      v-else-if="!filtered.length"
+      v-else-if="!chat.conversations.length"
       class="px-2 py-3 text-xs leading-5 text-muted-foreground"
     >
       {{
-        query
+        chat.historyQuery
           ? 'No matching conversations.'
           : 'Your conversations will appear here.'
       }}
     </p>
-    <ul class="space-y-1">
+    <ul
+      v-if="preferences.settings.sidebarGroups.conversations"
+      class="space-y-1"
+    >
       <li
-        v-for="item in filtered"
+        v-for="item in chat.conversations"
         :key="item.id"
-        class="group rounded-md"
+        class="group relative rounded-md"
         :class="
           item.id === chat.conversationId
             ? 'bg-sidebar-accent'
             : 'hover:bg-sidebar-accent/60'
         "
+        @contextmenu.prevent="menu = item.id"
       >
         <button
           class="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -119,109 +146,95 @@ async function copyExport(id: string) {
           />
           <span class="truncate">{{ item.title }}</span>
         </button>
-        <div class="flex justify-end gap-0.5 px-1 pb-1">
+        <div class="flex justify-end px-1 pb-1">
           <Button
             variant="ghost"
             size="icon"
             class="size-6 text-muted-foreground"
-            :aria-label="`${item.pinned ? 'Unpin' : 'Pin'} ${item.title}`"
-            @click="chat.updateConversation(item.id, item.title, !item.pinned)"
-            ><Pin class="size-3"
+            :aria-label="`Actions for ${item.title}`"
+            aria-haspopup="menu"
+            :aria-expanded="menu === item.id"
+            @click.stop="menu = menu === item.id ? null : item.id"
+            ><MoreHorizontal class="size-3.5"
           /></Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            class="size-6 text-muted-foreground"
-            :aria-label="`Rename ${item.title}`"
-            @click="rename(item)"
-            ><Pencil class="size-3"
-          /></Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            class="size-6 text-muted-foreground"
-            :aria-label="`Copy export of ${item.title}`"
-            @click="copyExport(item.id)"
-            ><Check v-if="copied === item.id" class="size-3" /><Copy
-              v-else
-              class="size-3"
-          /></Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            class="size-6 text-muted-foreground hover:text-destructive"
-            :aria-label="`Delete ${item.title}`"
-            @click="deleting = item"
-            ><Trash2 class="size-3"
-          /></Button>
+          <div
+            v-if="menu === item.id"
+            role="menu"
+            class="absolute top-8 right-1 z-30 grid w-36 gap-0.5 rounded-md border bg-popover p-1 text-xs shadow-md"
+            @keydown.esc="menu = null"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              class="rounded px-2 py-1.5 text-left hover:bg-accent"
+              @click="
+                menu = null;
+                chat.updateConversation(item.id, item.title, !item.pinned);
+              "
+            >
+              {{ item.pinned ? 'Unpin' : 'Pin' }}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class="rounded px-2 py-1.5 text-left hover:bg-accent"
+              @click="
+                menu = null;
+                rename(item);
+              "
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class="rounded px-2 py-1.5 text-left hover:bg-accent"
+              @click="exportFile(item.id)"
+            >
+              Export
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class="rounded px-2 py-1.5 text-left text-destructive hover:bg-accent"
+              @click="
+                menu = null;
+                deleting = item;
+              "
+            >
+              Delete
+            </button>
+          </div>
         </div>
       </li>
     </ul>
-    <p v-if="copied" role="status" class="sr-only">
-      Conversation export copied.
+    <p
+      v-if="chat.historyError"
+      role="alert"
+      class="px-2 py-2 text-xs text-destructive"
+    >
+      {{ chat.historyError.message }}
     </p>
-    <Dialog
-      :open="!!editing"
-      @update:open="
-        (open) => {
-          if (!open && !busy) editing = null;
-        }
+    <Button
+      v-if="
+        preferences.settings.sidebarGroups.conversations && chat.historyHasMore
       "
+      variant="ghost"
+      class="mt-2 w-full text-xs"
+      :disabled="chat.historyPaging"
+      @click="more"
+      >{{ chat.historyPaging ? 'Loading…' : 'Load more conversations' }}</Button
     >
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader
-          ><DialogTitle>Rename conversation</DialogTitle
-          ><DialogDescription
-            >Choose a title to find this conversation later.</DialogDescription
-          ></DialogHeader
-        >
-        <form @submit.prevent="save">
-          <label for="conversation-title" class="mb-2 block text-sm"
-            >Title</label
-          ><Input
-            id="conversation-title"
-            v-model="title"
-            maxlength="200"
-            autofocus
-            :disabled="busy"
-          /><DialogFooter class="mt-5"
-            ><Button
-              type="button"
-              variant="outline"
-              :disabled="busy"
-              @click="editing = null"
-              >Cancel</Button
-            ><Button type="submit" :disabled="busy || !title.trim()"
-              >Save title</Button
-            ></DialogFooter
-          >
-        </form>
-      </DialogContent>
-    </Dialog>
-    <Dialog
-      :open="!!deleting"
-      @update:open="
-        (open) => {
-          if (!open && !busy) deleting = null;
-        }
-      "
+    <Button
+      variant="ghost"
+      class="mt-2 w-full justify-start text-xs"
+      @click="retaining = true"
+      ><Trash2 class="size-3.5" />Apply retention</Button
     >
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader
-          ><DialogTitle>Delete conversation?</DialogTitle
-          ><DialogDescription
-            >“{{ deleting?.title }}” and its messages will be permanently
-            deleted from this device. This cannot be undone.</DialogDescription
-          ></DialogHeader
-        >
-        <DialogFooter
-          ><Button variant="outline" :disabled="busy" @click="deleting = null"
-            >Cancel</Button
-          ><Button variant="destructive" :disabled="busy" @click="remove"
-            >Delete conversation</Button
-          ></DialogFooter
-        >
-      </DialogContent>
-    </Dialog>
+    <ConversationDialogs
+      v-model:editing="editing"
+      v-model:deleting="deleting"
+      v-model:retaining="retaining"
+    />
   </section>
 </template>

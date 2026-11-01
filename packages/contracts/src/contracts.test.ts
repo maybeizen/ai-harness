@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { requestSchema, responseSchema, modes } from './index';
+import { agentModes, requestSchema, responseSchema } from './index';
 describe('wire contracts', () => {
   it('limits requests to infrastructure operations', () => {
     expect(
@@ -19,7 +19,7 @@ describe('wire contracts', () => {
       }).success,
     ).toBe(false);
   });
-  it('validates response payloads and reserves four modes', () => {
+  it('validates response payloads and keeps one agent mode list', () => {
     expect(
       responseSchema.safeParse({
         version: 2,
@@ -28,6 +28,15 @@ describe('wire contracts', () => {
         result: { status: 'ready' },
       }).success,
     ).toBe(false);
-    expect(modes).toEqual(['ask', 'plan', 'edit', 'agent']);
+    expect(agentModes).toEqual([
+      'ask',
+      'plan',
+      'edit',
+      'agent',
+      'multitask',
+      'debug',
+      'review',
+      'security',
+    ]);
   });
 });

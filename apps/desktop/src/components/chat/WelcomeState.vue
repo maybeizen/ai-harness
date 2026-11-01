@@ -1,11 +1,6 @@
 <script setup lang="ts">
-import {
-  Aperture,
-  ArrowUpRight,
-  Lightbulb,
-  NotebookPen,
-  Waypoints,
-} from '@lucide/vue';
+import BrandMark from '../BrandMark.vue';
+import { ArrowUpRight, Lightbulb, NotebookPen, Waypoints } from '@lucide/vue';
 import { Button } from '../ui/button';
 import { useConnectionsStore } from '../../stores/connections';
 const connections = useConnectionsStore();
@@ -36,7 +31,7 @@ const suggestions = [
       <div
         class="mb-7 inline-flex size-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/6 text-primary"
       >
-        <Aperture class="size-6" />
+        <BrandMark class="size-6" />
       </div>
       <p
         class="mb-3 text-[10px] font-medium tracking-[0.2em] text-muted-foreground uppercase"

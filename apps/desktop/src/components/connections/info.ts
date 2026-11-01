@@ -1,7 +1,7 @@
 import type { ConnectionKind } from '@harness/contracts';
 export const connectionInfo: Record<
   ConnectionKind,
-  { description: string; setup: string; action: string }
+  { description: string; setup: string; action: string; endpoint?: string }
 > = {
   chatgpt: {
     description:
@@ -38,5 +38,32 @@ export const connectionInfo: Record<
       'Connect an xAI Console key. API access and billing are separate from Grok consumer sign-in.',
     setup: 'https://console.x.ai',
     action: 'Connect API key',
+  },
+  openrouter: {
+    description:
+      'Connect an OpenRouter key. Discovery and chat use the official OpenRouter endpoint.',
+    setup: 'https://openrouter.ai/keys',
+    action: 'Connect API key',
+  },
+  ollama: {
+    description:
+      'Connect a local Ollama server. The default base URL is http://127.0.0.1:11434/v1. A bearer token is optional.',
+    setup: 'https://ollama.com/',
+    action: 'Connect Ollama',
+    endpoint: 'http://127.0.0.1:11434/v1',
+  },
+  lmstudio: {
+    description:
+      'Connect a local LM Studio server. The default base URL is http://127.0.0.1:1234/v1. A bearer token is optional.',
+    setup: 'https://lmstudio.ai/',
+    action: 'Connect LM Studio',
+    endpoint: 'http://127.0.0.1:1234/v1',
+  },
+  custom: {
+    description:
+      'Connect an OpenAI-compatible endpoint. The base URL must be HTTP or HTTPS and cannot contain credentials.',
+    setup: '',
+    action: 'Connect endpoint',
+    endpoint: 'https://host.example/v1',
   },
 };

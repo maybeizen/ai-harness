@@ -19,5 +19,25 @@ be refreshed or replaced before sending. Storage errors require attention; chang
 must not be assumed saved when an error is displayed.
 
 Current shortcuts: Ctrl/Cmd+N new conversation, Ctrl/Cmd+B sidebar, Ctrl/Cmd+,
-appearance, Escape stop response. The app currently provides text chat; project
-editing, command execution and MCP are tracked implementation work.
+appearance, Escape stop response.
+
+The mode selector changes what a task is allowed to do. Ask and Plan can read
+the selected workspace. Edit can change files after approval and cannot run
+commands. Agent, Multitask, and Debug can run commands only when bubblewrap is
+available; otherwise the task fails closed. Review and Security report findings
+and do not change files or run commands. MCP tools stay hidden in Ask, Plan,
+Review, and Security, and each MCP call asks for approval.
+
+The user terminal is a shell in the selected directory. It is not a filesystem
+sandbox. A working directory does not isolate the shell from the rest of the
+account. Agent commands use the separate bubblewrap path.
+
+When the selected model reports vision support, image attachments are sent from
+local attachment storage with the message. When that capability is missing or
+unsupported, the image stays on this device and the provider receives the text.
+The conversation still records the attachment ids.
+
+Open a project from the sidebar, choose a workspace, and review Git changes in
+the workspace panel. Accepting a diff applies the reviewed patch only when the
+file hash still matches. Live provider sign-in, a packaged AppImage smoke test,
+and a native close/reopen check are not part of the automated browser workflow.

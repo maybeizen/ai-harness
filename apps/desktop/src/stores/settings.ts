@@ -7,25 +7,18 @@ import {
   type AppError,
 } from '@harness/contracts';
 import { useBackend } from '../transport/backend';
+import { applyAppearance } from './appearance';
 export const useSettingsStore = defineStore('settings', () => {
   const backend = useBackend();
   const settings = ref<Settings>(settingsSchema.parse({}));
   const ready = ref(false);
   const error = ref<AppError | null>(null);
   let queue = Promise.resolve();
+  let dirty = false;
   let media: MediaQueryList | undefined;
   function apply() {
     if (typeof document === 'undefined') return;
-    const root = document.documentElement;
-    root.dataset.theme =
-      settings.value.theme === 'system'
-        ? media?.matches
-          ? 'dark'
-          : 'light'
-        : settings.value.theme;
-    root.dataset.accent = settings.value.accent;
-    root.dataset.density = settings.value.density;
-    root.dataset.motion = settings.value.reducedMotion ? 'reduced' : 'full';
+    applyAppearance(settings.value, media?.matches ?? true);
   }
   async function initialize() {
     try {
@@ -48,18 +41,40 @@ export const useSettingsStore = defineStore('settings', () => {
     settings.value = settingsSchema.parse({ ...settings.value, ...update });
     apply();
     if (!ready.value) return Promise.resolve();
+    dirty = true;
     const snapshot = settingsSchema.parse(settings.value);
     queue = queue.then(async () => {
       try {
         await backend.storage({ action: 'settings.set', settings: snapshot });
         error.value = null;
+        dirty = false;
       } catch (cause) {
         error.value = toAppError(cause);
       }
     });
     return queue;
   }
+  async function flush() {
+    if (!ready.value)
+      throw Object.assign(
+        new Error(error.value?.message ?? 'Preferences have not loaded.'),
+        { code: error.value?.code ?? 'STORAGE_ERROR' },
+      );
+    let current: Promise<void>;
+    do {
+      current = queue;
+      await current;
+    } while (current !== queue);
+    if (dirty || error.value) {
+      await patch({});
+      if (error.value || dirty)
+        throw Object.assign(
+          new Error(error.value?.message ?? 'Preferences could not be saved.'),
+          { code: error.value?.code ?? 'STORAGE_ERROR' },
+        );
+    }
+  }
   watch(settings, apply);
   onScopeDispose(() => media?.removeEventListener('change', apply));
-  return { settings, ready, error, initialize, patch };
+  return { settings, ready, error, initialize, patch, flush };
 });

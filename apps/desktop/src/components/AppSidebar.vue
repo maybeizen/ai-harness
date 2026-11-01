@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { Aperture, Plus, SlidersHorizontal, ArrowUpRight } from '@lucide/vue';
+import ProjectNavigation from './projects/ProjectNavigation.vue';
+import BrandMark from './BrandMark.vue';
+import { Plus, SlidersHorizontal, ArrowUpRight } from '@lucide/vue';
 import {
   Sidebar,
   SidebarContent,
@@ -30,10 +32,10 @@ function configure() {
       ><div class="flex items-center gap-2.5">
         <span
           class="flex size-8 items-center justify-center rounded-xl border border-primary/25 bg-primary/8 text-primary"
-          ><Aperture class="size-5"
+          ><BrandMark class="size-5"
         /></span>
         <div>
-          <p class="text-sm font-semibold tracking-tight">AI Harness</p>
+          <p class="text-sm font-semibold tracking-tight">Axioden</p>
           <p class="mt-0.5 text-[10px] tracking-wide text-muted-foreground">
             PERSONAL WORKSTATION
           </p>
@@ -47,7 +49,8 @@ function configure() {
       ></SidebarHeader
     >
     <SidebarContent
-      ><ConversationHistory @selected="sidebar.setOpenMobile(false)"
+      ><ProjectNavigation /><ConversationHistory
+        @selected="sidebar.setOpenMobile(false)"
     /></SidebarContent>
     <SidebarFooter class="gap-4 px-3 pb-5"
       ><Button

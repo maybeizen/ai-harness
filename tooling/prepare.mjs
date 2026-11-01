@@ -51,12 +51,7 @@ try {
     `${base}/binaries/harness-node-x86_64-unknown-linux-gnu`,
   );
   chmodSync(`${base}/binaries/harness-node-x86_64-unknown-linux-gnu`, 0o755);
-  // tauri-build copies resources incrementally; remove obsolete target resources.
-  for (const profile of ['debug', 'release'])
-    rmSync(`${base}/target/${profile}/runtime`, {
-      recursive: true,
-      force: true,
-    });
+  // Do not delete other profile installations while a developer app is running.
   const output = `${base}/resources/runtime`;
   mkdirSync(output, { recursive: true });
   await build({

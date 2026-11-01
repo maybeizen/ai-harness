@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import './styles/controls.css';
 :root {
   color-scheme: dark;
   --background: oklch(0.175 0.008 255);
@@ -17,8 +18,19 @@
   --accent-foreground: var(--foreground);
   --destructive: oklch(0.72 0.15 25);
   --destructive-foreground: oklch(0.18 0.02 25);
-  --border: oklch(0.31 0.009 255);
-  --input: oklch(0.34 0.012 255);
+  --border-opacity: 0.5;
+  --border-base: oklch(0.31 0.009 255);
+  --border: color-mix(
+    in oklch,
+    var(--border-base) calc(50% + var(--border-opacity) * 50%),
+    transparent
+  );
+  --input-base: oklch(0.34 0.012 255);
+  --input: color-mix(
+    in oklch,
+    var(--input-base) calc(50% + var(--border-opacity) * 50%),
+    transparent
+  );
   --ring: var(--primary);
   --radius: 0.65rem;
   --sidebar: oklch(0.155 0.007 255);
@@ -28,7 +40,12 @@
   --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: var(--muted);
   --sidebar-accent-foreground: var(--foreground);
-  --sidebar-border: oklch(0.26 0.009 255);
+  --sidebar-border-base: oklch(0.26 0.009 255);
+  --sidebar-border: color-mix(
+    in oklch,
+    var(--sidebar-border-base) calc(50% + var(--border-opacity) * 50%),
+    transparent
+  );
   --sidebar-ring: var(--ring);
 }
 @theme inline {
@@ -71,14 +88,7 @@
   }
   body {
     @apply m-0 bg-background text-foreground antialiased;
-    font-family:
-      Inter,
-      ui-sans-serif,
-      system-ui,
-      -apple-system,
-      BlinkMacSystemFont,
-      'Segoe UI',
-      sans-serif;
+    font-family: var(--shell-font, Inter, ui-sans-serif, system-ui, sans-serif);
   }
   button,
   a,
@@ -91,7 +101,10 @@
     cursor: pointer;
   }
   ::selection {
-    background: color-mix(in oklch, var(--primary), transparent 75%);
+    background: var(
+      --selection-color,
+      color-mix(in oklch, var(--primary), transparent 75%)
+    );
   }
 }
 .markdown {
@@ -199,10 +212,10 @@
   --primary-foreground: oklch(0.99 0.003 175);
   --destructive: oklch(0.48 0.17 25);
   --destructive-foreground: oklch(0.99 0 0);
-  --border: oklch(0.85 0.009 255);
-  --input: oklch(0.78 0.012 255);
+  --border-base: oklch(0.85 0.009 255);
+  --input-base: oklch(0.78 0.012 255);
   --sidebar: oklch(0.96 0.005 255);
-  --sidebar-border: oklch(0.87 0.009 255);
+  --sidebar-border-base: oklch(0.87 0.009 255);
 }
 :root[data-accent='blue'] {
   --primary: oklch(0.74 0.12 250);
@@ -216,9 +229,6 @@
 :root[data-theme='light'][data-accent='violet'] {
   --primary: oklch(0.44 0.14 300);
 }
-:root[data-density='compact'] {
-  font-size: 14px;
-}
 :root[data-motion='reduced'] *,
 :root[data-motion='reduced'] *::before,
 :root[data-motion='reduced'] *::after {
@@ -226,12 +236,24 @@
   transition: none !important;
   scroll-behavior: auto !important;
 }
-:focus-visible {
+:where(button, a, input, textarea, select):focus-visible {
   outline: 2px solid var(--ring);
-  outline-offset: 3px;
+  outline-offset: 2px;
+}
+:where(
+    button,
+    input,
+    textarea,
+    select
+  )[class*='focus-visible:ring']:focus-visible {
+  outline: none;
 }
 
 :root:not([data-theme='light']) .shiki,
 :root:not([data-theme='light']) .shiki span {
   color: var(--shiki-dark) !important;
+}
+
+.has-workspace-background > :not(.workspace-background) {
+  position: relative;
 }

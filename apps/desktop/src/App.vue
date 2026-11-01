@@ -1,9 +1,26 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { Aperture, X, ArrowUpRight } from '@lucide/vue';
-import { SidebarProvider, SidebarTrigger } from './components/ui/sidebar';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { toAppError } from '@harness/contracts';
+import { closeBarrier } from './lifecycle/close';
+import { qualifyNativeRestart } from './lifecycle/qualification';
+import { X, ArrowUpRight } from '@lucide/vue';
+import { SidebarProvider } from './components/ui/sidebar';
 import { TooltipProvider } from './components/ui/tooltip';
 import { Button } from './components/ui/button';
+import WorkspaceBackground from './components/WorkspaceBackground.vue';
+import { useBackgroundStore } from './stores/background';
+import AgentActivity from './components/agent/AgentActivity.vue';
+import AgentComposer from './components/agent/AgentComposer.vue';
+import ModeSelector from './components/agent/ModeSelector.vue';
+import { useTerminalsStore } from './stores/terminals';
+import { useAgentsStore } from './stores/agents';
+import AppHeader from './components/AppHeader.vue';
+import WorkbenchPanel from './components/workbench/WorkbenchPanel.vue';
+import SettingsDialog from './components/settings/SettingsDialog.vue';
+import KeyboardBindings from './components/settings/KeyboardBindings.vue';
+import type { ShortcutAction } from '@harness/contracts';
 import AppearanceDialog from './components/AppearanceDialog.vue';
 import { useSettingsStore } from './stores/settings';
 import AppSidebar from './components/AppSidebar.vue';
@@ -15,13 +32,48 @@ import { useConnectionsStore } from './stores/connections';
 import { useInfrastructureStore } from './stores/infrastructure';
 import { useChatStore } from './stores/chat';
 import { useBackend } from './transport/backend';
+import { bindShell, captureWindowForClose } from './shell/bind';
 const connections = useConnectionsStore();
 const infrastructure = useInfrastructureStore();
 const chat = useChatStore();
 const backend = useBackend();
 const settingsOpen = ref(false);
 const appearanceOpen = ref(false);
+const applicationSettingsOpen = ref(false);
 const preferences = useSettingsStore();
+const backgrounds = useBackgroundStore();
+const agents = useAgentsStore();
+const terminals = useTerminalsStore();
+const closing = ref(false);
+let unlistenClose: UnlistenFn | undefined;
+let releaseShell = () => {};
+const close = closeBarrier({
+  stop: async () => {
+    await chat.stop();
+    await agents.stopAll();
+    await terminals.closeAll();
+  },
+  isActive: () => chat.active || agents.active,
+  flush: async () => {
+    await captureWindowForClose();
+    await backgrounds.flush();
+    await chat.flushDraft();
+    await preferences.flush();
+  },
+  freeze: (value) => {
+    closing.value = value;
+    document.body.inert = value;
+    if (value) {
+      appearanceOpen.value = false;
+      settingsOpen.value = false;
+      applicationSettingsOpen.value = false;
+    }
+  },
+  destroy: () => invoke('complete_close'),
+  report: (cause) => {
+    preferences.error = toAppError(cause);
+  },
+});
 const composer = ref<{ focus: () => void } | null>(null);
 const title = computed(
   () =>
@@ -32,20 +84,34 @@ const title = computed(
     'New conversation',
 );
 onMounted(() => {
+  releaseShell = bindShell();
+  const closeRegistration = isTauri()
+    ? listen('app-close-requested', () => {
+        void close();
+      }).then((cleanup) => {
+        unlistenClose = cleanup;
+      })
+    : Promise.resolve();
   infrastructure.start();
   void (async () => {
     await preferences.initialize();
+    await backgrounds.load();
     connections.selected = preferences.settings.selectedProvider;
     connections.modelId = preferences.settings.selectedModel;
     await chat.initialize();
     await connections.initialize();
+    await closeRegistration;
+    if (isTauri()) await qualifyNativeRestart(preferences, chat, connections);
   })();
-  window.addEventListener('keydown', shortcuts);
 });
 onUnmounted(() => {
-  window.removeEventListener('keydown', shortcuts);
+  releaseShell();
+  unlistenClose?.();
   infrastructure.stop();
-  if (chat.active) void chat.stop();
+  if (chat.active)
+    void (preferences.settings.selectedMode === 'ask'
+      ? chat.stop()
+      : agents.stop());
 });
 watch(
   () => [connections.selected, connections.modelId] as const,
@@ -54,22 +120,23 @@ watch(
       void preferences.patch({ selectedProvider, selectedModel });
   },
 );
-function shortcuts(event: KeyboardEvent) {
-  if (event.isComposing) return;
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
-    event.preventDefault();
+function shortcut(action: ShortcutAction) {
+  if (closing.value) return;
+  if (action === 'newChat')
     void chat.newChat().then(() => nextTick(() => composer.value?.focus()));
-  } else if ((event.ctrlKey || event.metaKey) && event.key === ',') {
-    event.preventDefault();
-    appearanceOpen.value = true;
-  } else if (
-    event.key === 'Escape' &&
-    chat.active &&
+  else if (action === 'settings') applicationSettingsOpen.value = true;
+  else if (action === 'focusComposer') composer.value?.focus();
+  else if (action === 'openWorkspace')
+    void preferences.patch({ rightPanelOpen: true });
+  else if (
+    action === 'cancel' &&
     !settingsOpen.value &&
-    !appearanceOpen.value
-  ) {
-    void chat.stop();
-  }
+    !appearanceOpen.value &&
+    !applicationSettingsOpen.value
+  )
+    void (preferences.settings.selectedMode === 'ask'
+      ? chat.stop()
+      : agents.stop());
 }
 function prompt(text: string) {
   chat.draft = text;
@@ -85,48 +152,40 @@ function manageUsage() {
   <TooltipProvider :delay-duration="250"
     ><SidebarProvider
       :open="preferences.settings.sidebarOpen"
-      class="h-svh min-h-0 overflow-hidden [--sidebar-width:15.5rem]"
+      :inert="closing"
+      :aria-busy="closing"
+      :style="{ '--sidebar-width': preferences.settings.sidebarWidth + 'px' }"
+      class="relative h-svh min-h-0 overflow-hidden"
       @update:open="preferences.patch({ sidebarOpen: $event })"
     >
+      <WorkspaceBackground
+        v-if="preferences.settings.background.scope === 'global'"
+      />
+      <KeyboardBindings :disabled="closing" @action="shortcut" />
       <AppSidebar @connections="settingsOpen = true" />
-      <main class="relative flex min-w-0 flex-1 flex-col bg-background">
-        <header
-          class="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border/45 px-4 sm:px-6"
-        >
-          <div class="flex min-w-0 items-center gap-3">
-            <SidebarTrigger class="text-muted-foreground" /><Button
-              variant="ghost"
-              size="sm"
-              class="text-xs text-muted-foreground"
-              @click="appearanceOpen = true"
-              >Appearance</Button
-            ><span class="h-4 w-px bg-border" />
-            <h2 class="truncate text-xs font-medium text-muted-foreground">
-              {{ title }}
-            </h2>
-          </div>
-          <div
-            class="flex shrink-0 items-center gap-2 text-[10px] text-muted-foreground"
-          >
-            <span
-              class="size-1.5 rounded-full"
-              :class="
-                infrastructure.status === 'ready'
-                  ? 'bg-primary'
-                  : 'bg-muted-foreground'
-              "
-            /><span role="status">{{
-              infrastructure.status === 'ready'
-                ? 'Local workstation'
-                : infrastructure.status === 'starting'
-                  ? 'Starting runtime…'
-                  : 'Runtime unavailable'
-            }}</span
-            ><Aperture
-              class="ml-2 hidden size-3.5 text-muted-foreground/50 sm:block"
-            />
-          </div>
-        </header>
+      <main
+        class="relative flex min-w-0 flex-1 flex-col bg-background"
+        :class="{
+          'has-workspace-background': !!backgrounds.dataUrl,
+          'bg-transparent!':
+            !!backgrounds.dataUrl &&
+            preferences.settings.background.scope === 'global',
+        }"
+      >
+        <WorkspaceBackground
+          v-if="preferences.settings.background.scope === 'conversation'"
+        />
+        <AppHeader
+          :title="title"
+          :status="infrastructure.status"
+          @appearance="appearanceOpen = true"
+          @settings="applicationSettingsOpen = true"
+          @workspace="
+            preferences.patch({
+              rightPanelOpen: !preferences.settings.rightPanelOpen,
+            })
+          "
+        />
         <div
           v-if="preferences.error"
           role="alert"
@@ -142,10 +201,14 @@ function manageUsage() {
           >
         </div>
         <WelcomeState
-          v-if="!chat.messages.length"
+          v-if="
+            preferences.settings.selectedMode === 'ask' && !chat.messages.length
+          "
           @connect="settingsOpen = true"
           @prompt="prompt"
-        /><ConversationView v-else />
+        /><ConversationView
+          v-else-if="preferences.settings.selectedMode === 'ask'"
+        /><AgentActivity v-else />
         <div
           v-if="chat.error"
           role="alert"
@@ -184,8 +247,20 @@ function manageUsage() {
             ><X class="size-3.5"
           /></Button>
         </div>
-        <MessageComposer ref="composer" />
+        <ModeSelector /><MessageComposer
+          v-if="preferences.settings.selectedMode === 'ask'"
+          ref="composer"
+        /><AgentComposer v-else ref="composer" />
       </main>
+      <WorkbenchPanel
+        v-if="preferences.settings.rightPanelOpen"
+        @close="preferences.patch({ rightPanelOpen: false })"
+      />
+      <SettingsDialog
+        v-model="applicationSettingsOpen"
+        :disabled="closing"
+        @connections="settingsOpen = true"
+      />
       <AppearanceDialog v-model="appearanceOpen" /><ConnectionsDialog
         v-model="settingsOpen"
       /> </SidebarProvider

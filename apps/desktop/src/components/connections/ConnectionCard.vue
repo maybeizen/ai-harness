@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import {
   ArrowUpRight,
   LoaderCircle,
@@ -29,8 +29,24 @@ const chat = useChatStore();
 const backend = useBackend();
 const key = ref('');
 const executable = ref(props.connection.executable ?? '');
+const baseURL = ref('');
 const storage = ref('secure');
 const linkFailed = ref(false);
+watch(
+  () => props.connection.baseURL,
+  (value) => {
+    if (value) baseURL.value = value;
+  },
+  { immediate: true },
+);
+const connectDisabled = computed(
+  () =>
+    chat.active ||
+    !!connections.busy ||
+    (props.connection.method === 'api-key' && !key.value.trim()) ||
+    (props.connection.id === 'custom' && !baseURL.value.trim()) ||
+    (props.connection.id === 'claude-client' && !executable.value.trim()),
+);
 async function connect() {
   const value = key.value;
   key.value = '';
@@ -38,6 +54,7 @@ async function connect() {
     apiKey: value,
     sessionOnly: storage.value === 'session',
     executable: executable.value,
+    baseURL: baseURL.value.trim(),
   });
   if (success) emit('connected');
 }
@@ -89,6 +106,9 @@ async function refresh() {
       <p v-if="connection.account" class="mb-2 truncate text-xs">
         {{ connection.account }}
       </p>
+      <p v-if="connection.baseURL" class="mb-2 truncate text-xs">
+        {{ connection.baseURL }}
+      </p>
       <p
         class="mb-3 flex items-center gap-1.5 text-[11px] text-muted-foreground"
       >
@@ -96,11 +116,13 @@ async function refresh() {
           v-if="connection.storage === 'session'"
           class="size-3"
         /><ShieldCheck v-else class="size-3" />{{
-          connection.storage === 'session'
-            ? 'Session only · lost when the app closes'
-            : connection.storage === 'client'
-              ? 'Authentication managed by the official client'
-              : 'Saved in your OS credential service'
+          connection.method === 'endpoint' && connection.storage === 'secure'
+            ? 'Endpoint saved on this device. Bearer tokens use your OS credential service.'
+            : connection.storage === 'session'
+              ? 'Session only · lost when the app closes'
+              : connection.storage === 'client'
+                ? 'Authentication managed by the official client'
+                : 'Saved in your OS credential service'
         }}
       </p>
       <div class="flex gap-2">
@@ -122,7 +144,27 @@ async function refresh() {
     <template
       v-if="!connection.configured || connection.status === 'unavailable'"
     >
-      <div v-if="connection.method === 'api-key'" class="mb-3">
+      <div v-if="connection.method === 'endpoint'" class="mb-3">
+        <label
+          :for="`${connection.id}-endpoint`"
+          class="mb-1.5 block text-xs text-muted-foreground"
+          >Base URL</label
+        ><Input
+          :id="`${connection.id}-endpoint`"
+          v-model="baseURL"
+          spellcheck="false"
+          :placeholder="
+            connectionInfo[connection.id].endpoint ?? 'https://host.example/v1'
+          "
+          :disabled="!!connections.busy || chat.active"
+        />
+      </div>
+      <div
+        v-if="
+          connection.method === 'api-key' || connection.method === 'endpoint'
+        "
+        class="mb-3"
+      >
         <label :for="`${connection.id}-key`" class="sr-only"
           >{{ connection.label }} API key</label
         ><Input
@@ -131,7 +173,11 @@ async function refresh() {
           type="password"
           autocomplete="off"
           spellcheck="false"
-          placeholder="Paste API key"
+          :placeholder="
+            connection.method === 'endpoint'
+              ? 'Bearer token, if required'
+              : 'Paste API key'
+          "
           :disabled="!!connections.busy || chat.active"
           @keydown.enter="connect"
         />
@@ -179,12 +225,7 @@ async function refresh() {
         <Button
           size="sm"
           :variant="connection.id === 'chatgpt' ? 'default' : 'secondary'"
-          :disabled="
-            chat.active ||
-            !!connections.busy ||
-            (connection.method === 'api-key' && !key.trim()) ||
-            (connection.id === 'claude-client' && !executable.trim())
-          "
+          :disabled="connectDisabled"
           @click="connect"
           ><LoaderCircle
             v-if="connections.busy === connection.id"
@@ -197,6 +238,7 @@ async function refresh() {
               : connectionInfo[connection.id].action
           }}</Button
         ><Button
+          v-if="connectionInfo[connection.id].setup"
           variant="ghost"
           size="sm"
           class="gap-1 text-xs text-muted-foreground"

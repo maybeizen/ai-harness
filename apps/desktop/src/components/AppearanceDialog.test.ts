@@ -6,6 +6,14 @@ import { settingsSchema, type Settings } from '@harness/contracts';
 import { useSettingsStore } from '../stores/settings';
 import AppearanceDialog from './AppearanceDialog.vue';
 const storage = vi.hoisted(() => vi.fn());
+vi.mock('../stores/background', () => ({
+  useBackgroundStore: () => ({
+    dataUrl: null,
+    error: null,
+    importImage: vi.fn(),
+    remove: vi.fn(),
+  }),
+}));
 vi.mock('../transport/backend', () => ({ useBackend: () => ({ storage }) }));
 it('disables appearance controls until delayed preferences hydration finishes', async () => {
   let resolve!: (settings: Settings) => void;

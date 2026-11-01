@@ -20,7 +20,9 @@
     "test:browser": "playwright test",
     "test:package": "node tooling/smoke-package.mjs",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:browser",
-    "doctor": "node tooling/doctor.mjs"
+    "doctor": "node tooling/doctor.mjs",
+    "test:native-restart": "node tooling/qualify-restart.mjs",
+    "test:live-providers": "node tooling/qualify-restart.mjs --live"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

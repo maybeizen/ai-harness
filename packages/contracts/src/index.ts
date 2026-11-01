@@ -1,8 +1,7 @@
 import { z } from 'zod';
+import type { ModelCapabilities } from './generation';
 export const PROTOCOL_VERSION = 2;
 export const MAX_MESSAGE_BYTES = 1048576;
-export const modes = ['ask', 'plan', 'edit', 'agent'] as const;
-export type Mode = (typeof modes)[number];
 export const requestSchema = z
   .object({
     version: z.literal(PROTOCOL_VERSION),
@@ -56,12 +55,6 @@ export type ProviderKind =
   | 'ollama'
   | 'lmstudio'
   | 'custom';
-export type Support = 'supported' | 'unsupported' | 'unknown';
-export interface ModelCapabilities {
-  tools: Support;
-  images: Support;
-  structuredOutput: Support;
-}
 export interface ProviderConfig {
   id: string;
   kind: ProviderKind;
@@ -78,3 +71,31 @@ export * from './chat';
 export * from './wire';
 
 export * from './storage';
+export {
+  appearanceSettingsSchema,
+  themePresetSchema,
+  backgroundSchema,
+  type AppearanceSettings,
+} from './preferences';
+
+export * from './workspace';
+
+export * from './agent';
+
+export * from './projects';
+
+export * from './shortcuts';
+
+export * from './agent-wire';
+
+export * from './terminal';
+
+export * from './mcp';
+export * from './mcp-schema';
+export * from './generation';
+export * from './messages';
+export * from './shell';
+export * from './retention';
+export * from './selection';
+export * from './conversation-file';
+export * from './workstation';

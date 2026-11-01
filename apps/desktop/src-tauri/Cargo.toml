@@ -3,6 +3,10 @@ name = "ai-harness"
 version = "0.1.0"
 edition = "2021"
 publish = false
+[[bin]]
+name = "axioden"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 [dependencies]
@@ -23,6 +27,9 @@ url = "2"
 open = "5"
 tauri-plugin-clipboard-manager = "2"
 subtle = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

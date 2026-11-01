@@ -11,6 +11,10 @@ import {
   type ConnectionKind,
   type GenerationInput,
   type ChatEvent,
+  type WorkspaceOperation,
+  directorySchema,
+  workspaceOperationSchema,
+  type Directory,
   type StorageOperation,
   storageOperationSchema,
 } from '@harness/contracts';
@@ -19,6 +23,11 @@ export interface Discovery {
   models: ChatModel[];
 }
 export interface Backend {
+  openWorkspace(this: void): Promise<Directory | null>;
+  workspace(
+    this: void,
+    operation: Exclude<WorkspaceOperation, { action: 'register' }>,
+  ): Promise<unknown>;
   storage(this: void, operation: StorageOperation): Promise<unknown>;
   health(
     this: void,
@@ -30,6 +39,7 @@ export interface Backend {
     connectionId: ConnectionKind,
     apiKey: string,
     sessionOnly: boolean,
+    baseURL?: string,
   ): Promise<Discovery>;
   connectChatgpt(this: void, sessionOnly: boolean): Promise<Discovery>;
   connectClaude(this: void, executable: string): Promise<Discovery>;
@@ -53,6 +63,12 @@ const discoverySchema = z
 const discover = async (command: string, args: Record<string, unknown>) =>
   discoverySchema.parse(await invoke(command, args));
 export const nativeBackend: Backend = {
+  openWorkspace: async () =>
+    directorySchema.nullable().parse(await invoke('open_workspace')),
+  workspace: (operation) =>
+    invoke('workspace_operation', {
+      operation: workspaceOperationSchema.parse(operation),
+    }),
   storage: (operation) =>
     invoke('storage_operation', {
       operation: storageOperationSchema.parse(operation),
@@ -66,8 +82,13 @@ export const nativeBackend: Backend = {
     return z.array(connectionSchema).parse(await invoke('list_connections'));
   },
   refresh: (connectionId) => discover('refresh_connection', { connectionId }),
-  connectApi: (connectionId, apiKey, sessionOnly) =>
-    discover('connect_api', { connectionId, apiKey, sessionOnly }),
+  connectApi: (connectionId, apiKey, sessionOnly, baseURL) =>
+    discover('connect_api', {
+      connectionId,
+      apiKey,
+      sessionOnly,
+      ...(baseURL ? { baseUrl: baseURL } : {}),
+    }),
   connectChatgpt: (sessionOnly) => discover('connect_chatgpt', { sessionOnly }),
   connectClaude: (executable) => discover('connect_claude', { executable }),
   cancelSignIn: () => invoke('cancel_sign_in'),

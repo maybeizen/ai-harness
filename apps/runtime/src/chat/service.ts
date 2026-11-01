@@ -1,13 +1,18 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { discoverModels, streamChat } from '@harness/providers';
+import {
+  discoverModels,
+  streamChat,
+  type PromptImage,
+} from '@harness/providers';
 import type { ConnectionKind, GenerationInput } from '@harness/contracts';
 import { claudeModels, claudeStream } from './claude';
 export interface RuntimeAuth {
   credential?: string | undefined;
   executable?: string | undefined;
+  baseURL?: string | undefined;
 }
-export function chatService(directory: string) {
+export function chatService(directory: string, fetcher: typeof fetch = fetch) {
   const clientDirectory = join(directory, 'claude-chat');
   mkdirSync(clientDirectory, { recursive: true, mode: 0o700 });
   return {
@@ -18,11 +23,16 @@ export function chatService(directory: string) {
             kind,
             auth.credential ?? '',
             AbortSignal.timeout(20000),
+            fetcher,
+            auth.baseURL,
           ),
     stream: (
       input: GenerationInput,
       auth: RuntimeAuth,
       controller: AbortController,
+      context = '',
+      images: Readonly<Record<string, readonly PromptImage[]>> = {},
+      vision = false,
     ) =>
       input.connectionId === 'claude-client'
         ? claudeStream(
@@ -31,6 +41,9 @@ export function chatService(directory: string) {
             input.modelId,
             input.messages,
             controller,
+            context,
+            images,
+            vision,
           )
         : streamChat(
             input.connectionId,
@@ -38,6 +51,11 @@ export function chatService(directory: string) {
             input.messages,
             auth.credential ?? '',
             controller.signal,
+            fetcher,
+            context,
+            auth.baseURL,
+            images,
+            vision,
           ),
   };
 }

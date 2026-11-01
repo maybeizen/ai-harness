@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import type { ChatModel, ConnectionKind } from '@harness/contracts';
+import { modelCapabilities } from './capabilities';
+import { connectionBase } from './endpoint';
 import { httpFailure, ProviderFailure } from './errors';
 const rowSchema = z
   .object({
@@ -12,7 +14,24 @@ const rowSchema = z
     supportedGenerationMethods: z.array(z.string()).optional(),
     supported_actions: z.array(z.string()).optional(),
     output_modalities: z.array(z.string()).optional(),
+    input_modalities: z.array(z.string()).optional(),
     modalities: z.array(z.string()).optional(),
+    supported_parameters: z.array(z.string()).optional(),
+    supportedParameters: z.array(z.string()).optional(),
+    architecture: z
+      .object({
+        input_modalities: z.array(z.string()).optional(),
+        inputModalities: z.array(z.string()).optional(),
+      })
+      .passthrough()
+      .optional(),
+    outputTokenLimit: z.number().optional(),
+    maxTemperature: z.number().optional(),
+    temperature: z.number().optional(),
+    max_tokens: z.number().optional(),
+    max_output_tokens: z.number().optional(),
+    max_completion_tokens: z.number().optional(),
+    capabilities: z.unknown().optional(),
     shutdown_date: z.string().nullable().optional(),
   })
   .passthrough();
@@ -25,6 +44,12 @@ const pageSchema = z
     nextPageToken: z.string().optional(),
   })
   .passthrough();
+const official = {
+  google: 'https://generativelanguage.googleapis.com/v1beta/models',
+  anthropic: 'https://api.anthropic.com/v1/models',
+  xai: 'https://api.x.ai/v1/language-models',
+  openai: 'https://api.openai.com/v1/models',
+} as const;
 export function parseModels(kind: ConnectionKind, data: unknown): ChatModel[] {
   const page = pageSchema.parse(data);
   return (page.models ?? page.data ?? []).flatMap((row) => {
@@ -53,37 +78,59 @@ export function parseModels(kind: ConnectionKind, data: unknown): ChatModel[] {
       !row.output_modalities.includes('text')
     )
       return [];
+    const modelId = id.replace(/^models\//, '');
     return [
       {
-        id: id.replace(/^models\//, ''),
-        name:
-          row.display_name ?? row.displayName ?? id.replace(/^models\//, ''),
+        id: modelId,
+        name: row.display_name ?? row.displayName ?? modelId,
         verified: false,
         available: true,
+        capabilities: modelCapabilities(kind, modelId, row),
       },
     ];
   });
+}
+function headers(kind: ConnectionKind, credential: string) {
+  if (kind === 'google') return { 'x-goog-api-key': credential };
+  if (kind === 'anthropic')
+    return { 'x-api-key': credential, 'anthropic-version': '2023-06-01' };
+  if (!credential) return {};
+  return { Authorization: `Bearer ${credential}` };
+}
+function modelsUrl(kind: ConnectionKind, baseURL?: string) {
+  if (kind === 'claude-client')
+    throw new ProviderFailure({
+      code: 'INVALID_REQUEST',
+      message: 'This connection does not use endpoint discovery.',
+    });
+  if (
+    kind === 'google' ||
+    kind === 'anthropic' ||
+    kind === 'xai' ||
+    kind === 'chatgpt' ||
+    kind === 'openai'
+  ) {
+    connectionBase(kind, baseURL);
+    return kind === 'chatgpt' || kind === 'openai'
+      ? official.openai
+      : official[kind];
+  }
+  const base = connectionBase(kind, baseURL);
+  if (!base)
+    throw new ProviderFailure({
+      code: 'INVALID_REQUEST',
+      message: 'Enter an HTTP or HTTPS endpoint without credentials.',
+    });
+  return `${base}/models`;
 }
 export async function discoverModels(
   kind: ConnectionKind,
   credential: string,
   signal: AbortSignal,
   fetcher: typeof fetch = fetch,
+  baseURL?: string,
 ): Promise<ChatModel[]> {
-  const endpoint =
-    kind === 'google'
-      ? 'https://generativelanguage.googleapis.com/v1beta/models'
-      : kind === 'anthropic'
-        ? 'https://api.anthropic.com/v1/models'
-        : kind === 'xai'
-          ? 'https://api.x.ai/v1/language-models'
-          : 'https://api.openai.com/v1/models';
-  const headers: Record<string, string> =
-    kind === 'google'
-      ? { 'x-goog-api-key': credential }
-      : kind === 'anthropic'
-        ? { 'x-api-key': credential, 'anthropic-version': '2023-06-01' }
-        : { Authorization: `Bearer ${credential}` };
+  const endpoint = modelsUrl(kind, baseURL);
   const models: ChatModel[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < 100; page++) {
@@ -94,7 +141,10 @@ export async function discoverModels(
         kind === 'google' ? 'pageToken' : 'after_id',
         cursor,
       );
-    const response = await fetcher(url, { headers, signal });
+    const response = await fetcher(url, {
+      headers: headers(kind, credential),
+      signal,
+    });
     if (!response.ok) throw httpFailure(response.status);
     const body: unknown = await response.json();
     const parsed = pageSchema.parse(body);

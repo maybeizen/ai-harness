@@ -78,7 +78,12 @@ export const useConnectionsStore = defineStore('connections', () => {
   }
   async function connect(
     id: ConnectionKind,
-    options: { apiKey?: string; sessionOnly: boolean; executable?: string },
+    options: {
+      apiKey?: string;
+      sessionOnly: boolean;
+      executable?: string;
+      baseURL?: string;
+    },
   ) {
     if (busy.value) return false;
     busy.value = id;
@@ -93,6 +98,7 @@ export const useConnectionsStore = defineStore('connections', () => {
                 id,
                 options.apiKey ?? '',
                 options.sessionOnly,
+                options.baseURL,
               );
       await reload();
       accept(result);

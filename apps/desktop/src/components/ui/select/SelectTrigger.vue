@@ -5,6 +5,7 @@ import { reactiveOmit } from '@vueuse/core';
 import { ChevronDown } from '@lucide/vue';
 import { SelectIcon, SelectTrigger, useForwardProps } from 'reka-ui';
 import { cn, definedProps } from '@/lib/utils';
+import { controlField } from '../control-styles';
 
 const props = defineProps<
   SelectTriggerProps & { class?: HTMLAttributes['class'] }
@@ -20,7 +21,8 @@ const forwardedProps = useForwardProps(delegatedProps);
     v-bind="definedProps(forwardedProps)"
     :class="
       cn(
-        'flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-2 text-start text-sm whitespace-nowrap shadow-sm ring-offset-background focus:ring-1 focus:ring-ring focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground [&>span]:truncate',
+        controlField,
+        'flex items-center justify-between text-start whitespace-nowrap data-[placeholder]:text-muted-foreground [&>span]:truncate',
         props.class,
       )
     "

@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { test, expect, type Page } from '@playwright/test';
 async function connect(page: Page) {
   await page.goto('/tests/chat.html');
@@ -142,7 +143,7 @@ test('restores durable conversations and supports search, rename, pin, export an
   await page.reload();
   await expect(
     page.getByRole('combobox', { name: 'AI provider connection' }),
-  ).toContainText('OpenAI API');
+  ).toContainText('OpenAI');
   await expect(
     page.getByRole('button', { name: 'Select model', exact: true }),
   ).toContainText('Fixture One');
@@ -157,48 +158,52 @@ test('restores durable conversations and supports search, rename, pin, export an
   ).toHaveAttribute('aria-current', 'page');
   await history
     .getByRole('button', {
-      name: 'Rename Remember this conversation',
+      name: 'Actions for Remember this conversation',
       exact: true,
     })
     .click();
+  await history.getByRole('menuitem', { name: 'Rename', exact: true }).click();
   await page.getByLabel('Title', { exact: true }).fill('A saved answer');
   await page.getByRole('button', { name: 'Save title', exact: true }).click();
   await history
-    .getByRole('button', { name: 'Pin A saved answer', exact: true })
+    .getByRole('button', { name: 'Actions for A saved answer', exact: true })
+    .click();
+  await history.getByRole('menuitem', { name: 'Pin', exact: true }).click();
+  await history
+    .getByRole('button', { name: 'Actions for A saved answer', exact: true })
     .click();
   await expect(
-    history.getByRole('button', { name: 'Unpin A saved answer', exact: true }),
+    history.getByRole('menuitem', { name: 'Unpin', exact: true }),
   ).toBeVisible();
   await history
-    .getByRole('searchbox', { name: 'Conversations', exact: true })
+    .getByRole('searchbox', { name: 'Search conversations', exact: true })
     .fill('missing');
   await expect(history.getByText('No matching conversations.')).toBeVisible();
   await history
-    .getByRole('searchbox', { name: 'Conversations', exact: true })
+    .getByRole('searchbox', { name: 'Search conversations', exact: true })
     .fill('saved');
-  await history
-    .getByRole('button', { name: 'Copy export of A saved answer', exact: true })
-    .click();
-  await expect
-    .poll(() => page.evaluate(() => window.chatFixture.copied.length))
-    .toBe(1);
-  const exported = await page.evaluate(
-    () =>
-      JSON.parse(window.chatFixture.copied[0] ?? '{}') as {
-        conversation: { title: string };
-      },
-  );
+  const downloadPromise = page.waitForEvent('download');
+  await history.getByRole('menuitem', { name: 'Export', exact: true }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('A_saved_answer.axioden.json');
+  const path = await download.path();
+  if (!path) throw new Error('Export download was not saved.');
+  const exported = JSON.parse(await readFile(path, 'utf8')) as {
+    conversation: { title: string };
+  };
   expect(exported.conversation.title).toBe('A saved answer');
   await history
-    .getByRole('button', { name: 'Delete A saved answer', exact: true })
+    .getByRole('button', { name: 'Actions for A saved answer', exact: true })
     .click();
+  await history.getByRole('menuitem', { name: 'Delete', exact: true }).click();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(
     history.getByRole('button', { name: 'A saved answer', exact: true }),
   ).toBeVisible();
   await history
-    .getByRole('button', { name: 'Delete A saved answer', exact: true })
+    .getByRole('button', { name: 'Actions for A saved answer', exact: true })
     .click();
+  await history.getByRole('menuitem', { name: 'Delete', exact: true }).click();
   await page
     .getByRole('button', { name: 'Delete conversation', exact: true })
     .click();
@@ -235,4 +240,59 @@ test('switching away stops a generation and restores its partial reply', async (
   await expect(
     page.getByRole('button', { name: 'Send message', exact: true }),
   ).toBeVisible();
+});
+test('pages the complete history and searches titles outside the loaded pages', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    if (!localStorage.getItem('fixture.seeded')) {
+      localStorage.setItem('fixture.seeded', 'true');
+      localStorage.setItem(
+        'fixture.conversations',
+        JSON.stringify(
+          Array.from({ length: 1207 }, (_, i) => ({
+            id: `archive-${i}`,
+            title: i === 0 ? 'A distant needle' : 'Archived conversation ' + i,
+            pinned: false,
+            updatedAt: i,
+            messages: [],
+          })),
+        ),
+      );
+    }
+  });
+  await page.goto('/tests/chat.html');
+  const history = page.getByRole('region', { name: 'Conversation history' });
+  await expect(
+    history.getByRole('button', { name: 'A distant needle', exact: true }),
+  ).toHaveCount(0);
+  await history
+    .getByRole('button', { name: 'Load more conversations', exact: true })
+    .click();
+  await expect(history.locator('li')).toHaveCount(100);
+  await history
+    .getByRole('searchbox', { name: 'Search conversations', exact: true })
+    .fill('distant needle');
+  await expect(
+    history.getByRole('button', { name: 'A distant needle', exact: true }),
+  ).toBeVisible();
+});
+test('restores an autosaved unsent draft after reload', async ({ page }) => {
+  await connect(page);
+  const composer = page.getByRole('textbox', { name: 'Message', exact: true });
+  await composer.fill('An unsent idea that should survive');
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const settings = JSON.parse(
+          localStorage.getItem('fixture.settings') ?? '{}',
+        ) as { activeConversation?: string };
+        return settings.activeConversation
+          ? localStorage.getItem(`fixture.draft.${settings.activeConversation}`)
+          : null;
+      }),
+    )
+    .toBe('An unsent idea that should survive');
+  await page.reload();
+  await expect(composer).toHaveValue('An unsent idea that should survive');
 });

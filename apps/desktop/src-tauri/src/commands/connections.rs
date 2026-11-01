@@ -1,5 +1,6 @@
 use crate::{
     connections::{Connections, Record},
+    endpoint::{accepts_api_key, discovery_auth, prepare_base_url, requires_api_key},
     error::AppError,
     state::{call, AppState},
 };
@@ -20,29 +21,39 @@ pub async fn connect_api(
     connection_id: String,
     api_key: String,
     session_only: bool,
+    base_url: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Value, AppError> {
     Connections::validate(&connection_id)?;
-    if ["chatgpt", "claude-client"].contains(&connection_id.as_str())
-        || api_key.trim().is_empty()
-        || api_key.len() > 16384
+    let key = api_key.trim().to_string();
+    if !accepts_api_key(&connection_id)
+        || key.len() > 16384
+        || (requires_api_key(&connection_id) && key.is_empty())
     {
         return Err(AppError::new(
             "INVALID_REQUEST",
             "Enter a valid API key for an API connection.",
         ));
     }
+    let base = prepare_base_url(&connection_id, base_url.as_deref())?;
     let _guard = state.connections.update.lock().await;
-    let key = api_key.trim().to_string();
     let models = discovery(
         &state,
         &connection_id,
-        json!({"connectionId":connection_id,"credential":key}),
+        discovery_auth(&connection_id, &key, base.as_deref()),
     )
     .await?;
     state
         .connections
-        .save(&connection_id, Record::default(), key, session_only)
+        .save(
+            &connection_id,
+            Record {
+                base_url: base,
+                ..Default::default()
+            },
+            key,
+            session_only,
+        )
         .await?;
     Ok(models)
 }
@@ -71,6 +82,7 @@ pub async fn connect_claude(
             Record {
                 account: None,
                 executable: Some(executable),
+                ..Default::default()
             },
             String::new(),
             false,

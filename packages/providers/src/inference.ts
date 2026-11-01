@@ -2,8 +2,14 @@ import { streamText } from 'ai';
 import { z } from 'zod';
 import type { ConnectionKind, TextMessage } from '@harness/contracts';
 import { createModel } from './index';
+import { connectionBase } from './endpoint';
 import { readSse } from './sse';
 import { httpFailure, ProviderFailure } from './errors';
+import {
+  modelMessages,
+  responsesInput,
+  type PromptImage,
+} from './prompt-content';
 const eventSchema = z
   .object({
     type: z.string(),
@@ -24,6 +30,9 @@ async function* chatgpt(
   credential: string,
   signal: AbortSignal,
   fetcher: typeof fetch,
+  context = '',
+  images: Readonly<Record<string, readonly PromptImage[]>> = {},
+  vision = false,
 ) {
   const response = await fetcher('https://api.openai.com/v1/responses', {
     method: 'POST',
@@ -33,7 +42,7 @@ async function* chatgpt(
     },
     body: JSON.stringify({
       model: modelId,
-      input: messages.map((m) => ({ role: m.role, content: m.text })),
+      input: responsesInput(messages, images, vision, context),
       stream: true,
       store: false,
     }),
@@ -70,19 +79,38 @@ export async function* streamChat(
   credential: string,
   signal: AbortSignal,
   fetcher: typeof fetch = fetch,
+  context = '',
+  baseURL?: string,
+  images: Readonly<Record<string, readonly PromptImage[]>> = {},
+  vision = false,
 ): AsyncGenerator<string> {
+  const resolved = connectionBase(kind, baseURL);
   if (kind === 'chatgpt') {
-    yield* chatgpt(modelId, messages, credential, signal, fetcher);
+    yield* chatgpt(
+      modelId,
+      messages,
+      credential,
+      signal,
+      fetcher,
+      context,
+      images,
+      vision,
+    );
     return;
   }
   const model = await createModel(
-    { id: kind, kind, credentialRef: 'native' },
+    {
+      id: kind,
+      kind,
+      ...(credential ? { credentialRef: 'native' } : {}),
+      ...(resolved ? { baseURL: resolved } : {}),
+    },
     {
       providerId: kind,
       modelId,
       capabilities: {
         tools: 'unsupported',
-        images: 'unsupported',
+        images: vision ? 'supported' : 'unsupported',
         structuredOutput: 'unknown',
       },
     },
@@ -92,8 +120,10 @@ export async function* streamChat(
     },
   );
   const result = streamText({
+    onError: () => undefined,
     model,
-    messages: messages.map((m) => ({ role: m.role, content: m.text })),
+    ...(context ? { system: context } : {}),
+    messages: modelMessages(messages, images, vision),
     abortSignal: signal,
     maxRetries: 0,
     ...(kind === 'openai'

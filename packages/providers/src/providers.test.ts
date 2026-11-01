@@ -99,4 +99,34 @@ describe('provider boundary', () => {
     );
     expect(first.provider).not.toBe(second.provider);
   });
+  it('rejects credential-bearing endpoints before resolving a key', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const resolve = vi.fn().mockResolvedValue('fixture-key');
+    await expect(
+      createModel(
+        {
+          id: 'personal',
+          kind: 'custom',
+          baseURL: 'http://user:secret-token@127.0.0.1:9/v1',
+          credentialRef: 'fixture',
+        },
+        model,
+        { credentials: { resolve }, fetch },
+      ),
+    ).rejects.toThrow('Invalid provider endpoint');
+    await expect(
+      createModel(
+        {
+          id: 'personal',
+          kind: 'ollama',
+          baseURL: 'http://127.0.0.1:11434/v1?api_key=secret-token',
+        },
+        model,
+        { credentials: { resolve }, fetch },
+      ),
+    ).rejects.toThrow('Invalid provider endpoint');
+    expect(resolve).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(String(resolve.mock.calls)).not.toContain('secret-token');
+  });
 });

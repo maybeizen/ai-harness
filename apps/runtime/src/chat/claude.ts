@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isAbsolute } from 'node:path';
 import type { ChatModel, TextMessage } from '@harness/contracts';
-import { ProviderFailure } from '@harness/providers';
+import { ProviderFailure, type PromptImage } from '@harness/providers';
 const exec = promisify(execFile);
 export function claudeOptions(
   executable: string,
@@ -135,10 +135,17 @@ export async function* claudeStream(
   modelId: string,
   messages: TextMessage[],
   controller: AbortController,
+  context = '',
+  images: Readonly<Record<string, readonly PromptImage[]>> = {},
+  vision = false,
 ): AsyncGenerator<string> {
   const session = query({
     prompt: JSON.stringify({
-      conversation: messages.map(({ role, text }) => ({ role, text })),
+      ...(context ? { projectInstructions: context } : {}),
+      conversation: messages.map(({ id, role, text }) => {
+        const parts = vision && role === 'user' ? images[id] : undefined;
+        return parts?.length ? { role, text, images: parts } : { role, text };
+      }),
     }),
     options: {
       ...claudeOptions(executable, directory, controller),

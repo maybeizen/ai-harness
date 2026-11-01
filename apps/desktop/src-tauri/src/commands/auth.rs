@@ -64,6 +64,7 @@ pub async fn connect_chatgpt(
             Record {
                 account: tokens.email.clone(),
                 executable: None,
+                ..Default::default()
             },
             serde_json::to_string(&tokens).map_err(|_| AppError::internal())?,
             session_only,

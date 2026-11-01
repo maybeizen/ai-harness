@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AI Harness",
+  "productName": "Axioden",
   "version": "0.1.0",
   "identifier": "local.ai-harness.desktop",
   "build": {
@@ -12,11 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "AI Harness",
+        "title": "Axioden",
         "width": 1100,
         "height": 760,
         "minWidth": 640,
-        "minHeight": 480
+        "minHeight": 480,
+        "visible": false
       }
     ],
     "security": {
@@ -26,7 +27,13 @@
   "bundle": {
     "active": true,
     "targets": ["appimage"],
-    "icon": ["icons/icon.png"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "externalBin": ["binaries/harness-node"],
     "resources": {
       "resources/runtime/": "runtime/"

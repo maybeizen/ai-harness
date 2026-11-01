@@ -10,7 +10,9 @@ const props = defineProps<{
 <template>
   <ul
     data-sidebar="menu"
-    :class="cn('flex w-full min-w-0 flex-col gap-1', props.class)"
+    :class="
+      cn('flex w-full min-w-0 flex-col gap-[var(--sidebar-gap)]', props.class)
+    "
   >
     <slot />
   </ul>

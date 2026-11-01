@@ -1,5 +1,7 @@
 # Workstation implementation plan
 
+The active full-product continuation is tracked in [AXIODEN_COMPLETION.md](AXIODEN_COMPLETION.md). The original milestone audit and checkpoint below are historical; they do not describe the full current working tree.
+
 Status: active. This is a phased implementation, not a completed workstation.
 
 ## Current-state audit (2026-10-30)
@@ -51,32 +53,32 @@ Deletion must not race a running generation. Failed storage must be visible.
 
 ### 2. Workspaces and safe tools
 
-- [ ] Open folder, recent/favorite projects, workspace-scoped conversations/preferences.
+- [x] Open folder, recent/favorite projects, workspace-scoped conversations/preferences.
 - [ ] Native folder picker and missing-folder recovery.
-- [ ] Canonical/symlink-aware workspace boundaries and sensitive file protection.
-- [ ] Validated read/list/search/metadata tools with byte/time/output limits.
-- [ ] Operation-bound approvals, expiry/replay protection and audit records.
-- [ ] Create/edit/delete/patch tools with external-edit conflict checks.
+- [x] Canonical/symlink-aware workspace boundaries and sensitive file protection.
+- [x] Validated read/list/search/metadata tools with byte/time/output limits.
+- [x] Operation-bound approvals, expiry/replay protection and audit records.
+- [x] Create/edit/delete/patch tools with external-edit conflict checks.
 
 Acceptance: traversal/symlink escapes denied; writes require correct mode and approval;
 external edits never silently overwritten. Ask/Plan cannot execute write effects.
 
 ### 3. Agent runtime
 
-- [ ] Genuine provider capability registry and supported tool-call adapters.
-- [ ] Ask/Plan/Edit/Agent modes backed by enforced policies.
-- [ ] Multi-step loop, max steps, deadlines, retries, loop detection and context budget.
-- [ ] Cancellation propagation, resumable interrupted state and compaction.
-- [ ] Explicit concurrent session/resource limits and same-file edit coordination.
+- [x] Genuine provider capability registry and supported tool-call adapters.
+- [x] Ask/Plan/Edit/Agent modes backed by enforced policies.
+- [x] Multi-step loop, max steps, deadlines, retries, loop detection and context budget.
+- [x] Cancellation propagation, resumable interrupted state and compaction.
+- [x] Explicit concurrent session/resource limits and same-file edit coordination.
 
 Acceptance: deterministic tool-call inference fixtures cover denial, timeout, retry,
 cancel-before-first-token, cancellation during tools, and loop exhaustion.
 
 ### 4. Developer integrations and extensibility
 
-- [ ] Git detection/status/diffs, safe patch accept/reject and rollback.
-- [ ] User-facing Monaco files/diffs and xterm interactive PTYs.
-- [ ] Terminal resize, multiple sessions, termination and process cleanup.
+- [x] Git detection/status/diffs, safe patch accept/reject and rollback.
+- [x] User-facing Monaco files/diffs and xterm interactive PTYs.
+- [x] Terminal resize, multiple sessions, termination and process cleanup.
 - [ ] MCP stdio/remote lifecycle, discovery, credentials and permission integration.
 - [ ] Ollama/LM Studio/OpenRouter/custom connection settings and authenticated testing.
 
@@ -85,12 +87,12 @@ Commands are explicitly approved; do not describe ordinary subprocesses as sandb
 
 ### 5. Complete conversation and settings experience
 
-- [ ] Message edit/regeneration with retained failed variants, retry and attachments.
-- [ ] Structured tool/result/attachment persistence and migrations.
-- [ ] Import/export files, retention controls and diagnostics.
-- [ ] Resizable persisted panels/window geometry and complete settings categories.
-- [ ] Model-specific options validated against actual capabilities.
-- [ ] Pagination/virtualization based on measured history/file/terminal bottlenecks.
+- [x] Message edit/regeneration with retained failed variants, retry and attachments.
+- [x] Structured tool/result/attachment persistence and migrations.
+- [x] Import/export files, retention controls and diagnostics.
+- [x] Resizable persisted panels/window geometry and complete settings categories.
+- [x] Model-specific options validated against actual capabilities.
+- [x] Pagination/virtualization based on measured history/file/terminal bottlenecks.
 - [ ] Full keyboard navigation/focus restoration and screen-reader review.
 
 ### 6. Release qualification
@@ -143,10 +145,10 @@ Unknown-start cancellation IDs remain protected without eviction; after 1,024 su
 IDs new unknown cancellations fail explicitly and require runtime restart. Live
 providers and full desktop close/reopen were not requalified in this phase.
 
-Next implementation order: finish native lifecycle/close-flush acceptance and paginated
-archive contracts; then milestone 2 workspace selection and canonicalized read-only
-tools. Introduce operation-bound permission/approval contracts before enabling edits
-or commands. Keep current chat tests passing throughout. Follow milestones 3–6 for
-the genuine agent loop, developer integrations, MCP and release qualification.
+The 2026-11-01 suite covers the checked milestone 2–5 items. Native two-launch
+restart, live provider calls, Gemini CLI account sign-in, other operating systems,
+packaged-app smoke, abrupt host-kill durability, a connected bubblewrap MCP stdio
+session, and authenticated local/custom provider calls remain unchecked. See
+TESTING.md. Do not mark the workstation complete while those required items are open.
 
 Final quality gate: `pnpm check` passed (69 TypeScript, 10 Rust, 10 browser tests). `pnpm build` passed. Production dependency audit passed with no known vulnerabilities. See TESTING.md for exact scope and environmental limits.

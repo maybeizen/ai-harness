@@ -7,22 +7,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { useChatStore } from '../../stores/chat';
 import { useConnectionsStore } from '../../stores/connections';
 import ModelPicker from './ModelPicker.vue';
+import AttachmentBar from './AttachmentBar.vue';
+import { useComposerField } from './composer-field';
 const chat = useChatStore();
 const connections = useConnectionsStore();
 const root = ref<HTMLElement | null>(null);
-function textarea() {
-  return root.value?.querySelector('textarea');
-}
-function resize() {
-  const field = textarea();
-  if (field) {
-    field.style.height = 'auto';
-    field.style.height = `${Math.min(field.scrollHeight, 200)}px`;
-  }
-}
-function focus() {
-  textarea()?.focus();
-}
+const { resize, focus } = useComposerField(root);
 function stop(event: MouseEvent) {
   if (event.detail < 2) void chat.stop();
 }
@@ -43,14 +33,36 @@ watch(
     void nextTick(resize);
   },
 );
+watch(
+  () => [chat.conversationId, chat.active] as const,
+  (current, previous) => {
+    if (!previous || current[0] !== previous[0] || (previous[1] && !current[1]))
+      void nextTick(focus);
+  },
+);
 defineExpose({ focus });
 </script>
 <template>
-  <div class="mx-auto w-full max-w-3xl px-4 pt-3 pb-4 sm:px-8">
+  <div
+    class="mx-auto w-full max-w-[var(--chat-width,48rem)] px-4 pt-3 pb-4 sm:px-8"
+  >
     <div
       ref="root"
       class="rounded-2xl border border-border bg-card shadow-lg shadow-background/30 transition-colors focus-within:border-primary/45"
     >
+      <div class="px-2.5 pt-2.5">
+        <AttachmentBar
+          :disabled="chat.active"
+          :files="chat.pending"
+          :notice="
+            chat.imagesHeld
+              ? 'Images stay on this device. This model does not list vision, so they are not sent.'
+              : ''
+          "
+          @attach="chat.attach"
+          @remove="chat.removeAttachment"
+        />
+      </div>
       <Textarea
         v-model="chat.draft"
         aria-label="Message"

@@ -11,4 +11,8 @@ Reviewed 2026-10-27. Open Connections, choose a billing method, authenticate, re
 
 Secure storage requires a running, unlocked Linux Secret Service (for example GNOME Keyring or a compatible KDE setup). If unavailable, explicitly choose session-only storage; those credentials disappear on exit. Disconnect removes the app-owned saved connection. This does not revoke permissions at the provider; manage grants in the provider account as needed.
 
-OpenRouter, Ollama, LM Studio, and custom endpoint factories remain available as extension boundaries, without connection screens in this milestone. No provider keys are required for automated checks. Live acceptance has been completed for ChatGPT subscription only; the remaining connections require independent account-specific verification.
+OpenRouter, Ollama, LM Studio, and custom OpenAI-compatible endpoints have connection screens. Ollama defaults to `http://127.0.0.1:11434/v1` and LM Studio defaults to `http://127.0.0.1:1234/v1`. A bearer token is optional for those local servers. Custom base URLs must be HTTP or HTTPS and must not contain credentials. Official ChatGPT, OpenAI, Claude, Anthropic, Google, and xAI paths stay on their real adapters.
+
+Image bytes are added to a text request only when the selected model capability records vision as supported. Missing or unsupported capability data leaves the request text-only and keeps the attachment ids on the stored user message.
+
+No provider keys are required for automated checks. This 2026-11-01 run did not call a live provider. Earlier ChatGPT subscription acceptance remains a prior checkpoint, and the other accounts, including Gemini CLI sign-in, still need their own account-specific verification.

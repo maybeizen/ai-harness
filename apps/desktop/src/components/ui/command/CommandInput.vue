@@ -6,6 +6,7 @@ import { Search } from '@lucide/vue';
 import { ListboxFilter, useForwardProps } from 'reka-ui';
 import { cn, definedProps } from '@/lib/utils';
 import { useCommand } from '.';
+import { controlBase } from '../control-styles';
 
 defineOptions({
   inheritAttrs: false,
@@ -33,7 +34,8 @@ const { filterState } = useCommand();
       auto-focus
       :class="
         cn(
-          'flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
+          controlBase,
+          'flex h-[var(--menu-search-height)] border-0 bg-transparent py-2 shadow-none focus-visible:ring-inset',
           props.class,
         )
       "

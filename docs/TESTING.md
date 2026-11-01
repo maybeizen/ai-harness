@@ -45,3 +45,32 @@ shutdown collision; the final full browser run used one process and passed.
 No authenticated provider retest, complete native close/reopen preference acceptance,
 full desktop visual matrix, abrupt-kill durability test, or cross-platform qualification
 was performed. Keep those release criteria open.
+
+## Integrated workstation gate (2026-11-01)
+
+Commands ran from `/run/media/maybeizen/External1/projects/active/ai-harness` on
+`codex/workstation` with Node v24.22.1. pnpm 11.25.0 came from the corepack shim:
+
+```sh
+export PATH="$PWD/.cache/node-v24.22.1-linux-x64/bin:$PWD/.cache/node-v24.22.1-linux-x64/lib/node_modules/corepack/shims:$PATH"
+pnpm check
+pnpm build
+```
+
+`pnpm check` is `format:check && lint && typecheck && test && test:browser`.
+It exited 0.
+
+- `prettier --check .` and `cargo fmt --check`: passed.
+- `eslint . --max-warnings 0`, `node tooling/source-size.mjs`, and `cargo clippy --locked --all-targets -- -D warnings`: passed.
+- `vue-tsc --noEmit -p tsconfig.json`: passed.
+- Vitest: 86 files passed, 240 tests passed.
+- `cargo test --locked`: 22 passed, 0 failed, 0 ignored.
+- Playwright: 13 passed (`chat.spec.ts`, `appearance.spec.ts`, `integrations.spec.ts`, and `workflow.spec.ts`).
+
+`pnpm build` exited 0. It produced the Vite production client bundle and finished the Tauri release profile in 2m 12s. `pnpm test:native-restart`, `pnpm test:live-providers`, and `pnpm test:package` were not run. Packaged AppImage smoke was not part of this build.
+
+The browser workflow in `tests/browser/workflow.spec.ts` uses the fixture backend, not a live provider and not the keyring. Exercised in the UI: launch, connect the fixture OpenAI API provider, select Fixture One, send, read the streamed reply, see the saved history row, reload that state, create and open a project, switch modes, run an agent task, approve an edit, open the workspace Git list, review unified and split diffs, accept the patch, run the fixture test tool, read its result, and cancel a running task. Simulated in test code: agent events, tool results, Git status, and patch bytes. The fixture does not run bubblewrap or a real test command. History for a project with no associated chats shows the empty state because the fixture filter was extended in the browser harness.
+
+Also covered by the passing suite, with temporary files or mocked HTTP and no live network: vision bytes are sent only when the model capability is supported; MCP stdio is refused without approval (`PERMISSION_DENIED`) or without bubblewrap (`ISOLATION_UNAVAILABLE`), and the sentinel process does not start. A connected bubblewrap stdio session was not executed.
+
+Still open: native two-launch restart, live provider calls, Gemini CLI account sign-in, other operating systems, packaged-app smoke, and abrupt host-kill durability. The workstation is not complete while those remain unchecked.

@@ -15,7 +15,22 @@ const backend = vi.hoisted(() => ({
   cancel: vi.fn(),
   copy: vi.fn(),
 }));
-vi.mock('../transport/backend', () => ({ useBackend: () => backend }));
+const drafts = vi.hoisted(() => new Map<string, string>());
+vi.mock('../transport/backend', () => ({
+  useBackend: () => ({
+    ...backend,
+    storage: (operation: StorageOperation) => {
+      if (operation.action === 'draft.get')
+        return Promise.resolve(drafts.get(operation.id) ?? '');
+      if (operation.action === 'draft.set') {
+        if (operation.text) drafts.set(operation.id, operation.text);
+        else drafts.delete(operation.id);
+        return Promise.resolve(null);
+      }
+      return backend.storage(operation);
+    },
+  }),
+}));
 vi.mock('./connections', () => ({
   useConnectionsStore: () => ({
     ready: true,
@@ -46,7 +61,8 @@ function deferred<T>() {
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
-  backend.storage.mockResolvedValue([]);
+  drafts.clear();
+  backend.storage.mockResolvedValue({ items: [], nextCursor: null });
   backend.cancel.mockResolvedValue(undefined);
   backend.copy.mockResolvedValue(undefined);
   backend.start.mockResolvedValue(() => undefined);
@@ -60,6 +76,12 @@ it('ignores an older conversation load that finishes after a later selection', a
   );
   const chat = useChatStore();
   const loadingFirst = chat.selectConversation('first');
+  await vi.waitFor(() =>
+    expect(backend.storage).toHaveBeenCalledWith({
+      action: 'get',
+      id: 'first',
+    }),
+  );
   const loadingSecond = chat.selectConversation('second');
   second.resolve(conversation('second'));
   await loadingSecond;
@@ -96,7 +118,9 @@ it('preserves the submitted draft when the native start command fails', async ()
   chat.draft = 'Do not lose this';
   backend.start.mockRejectedValue(new Error('runtime unavailable'));
   backend.storage.mockImplementation((operation) =>
-    Promise.resolve(operation.action === 'get' ? null : []),
+    Promise.resolve(
+      operation.action === 'get' ? null : { items: [], nextCursor: null },
+    ),
   );
   await chat.send();
   expect(chat.draft).toBe('Do not lose this');
@@ -105,7 +129,7 @@ it('preserves the submitted draft when the native start command fails', async ()
   expect(
     backend.storage.mock.calls.every(
       ([operation]) =>
-        operation.action === 'list' || operation.action === 'get',
+        operation.action === 'history.page' || operation.action === 'get',
     ),
   ).toBe(true);
 });
@@ -113,7 +137,11 @@ it('a late new-chat cancellation cannot overwrite a newer selection', async () =
   const stopped = deferred<void>();
   backend.cancel.mockReturnValue(stopped.promise);
   backend.storage.mockImplementation((operation: { action: string }) =>
-    Promise.resolve(operation.action === 'get' ? conversation('selected') : []),
+    Promise.resolve(
+      operation.action === 'get'
+        ? conversation('selected')
+        : { items: [], nextCursor: null },
+    ),
   );
   const chat = useChatStore();
   chat.draft = 'slow';
@@ -166,7 +194,9 @@ it('a lost start acknowledgement restores accepted messages without duplicating 
     },
   );
   backend.storage.mockImplementation((operation) =>
-    Promise.resolve(operation.action === 'get' ? accepted : []),
+    Promise.resolve(
+      operation.action === 'get' ? accepted : { items: [], nextCursor: null },
+    ),
   );
   const chat = useChatStore();
   chat.draft = 'Accepted once';
@@ -224,7 +254,9 @@ it('blocks another send while a rejected start is being reconciled', async () =>
   const pending = deferred<Conversation | null>();
   backend.start.mockRejectedValueOnce(new Error('lost acknowledgement'));
   backend.storage.mockImplementation((operation) =>
-    operation.action === 'get' ? pending.promise : Promise.resolve([]),
+    operation.action === 'get'
+      ? pending.promise
+      : Promise.resolve({ items: [], nextCursor: null }),
   );
   const chat = useChatStore();
   chat.draft = 'first';
@@ -253,4 +285,77 @@ it('blocks sending while a conversation switch is loading', async () => {
   await selecting;
   expect(chat.conversationId).toBe('target');
   expect(chat.historyLoading).toBe(false);
+});
+
+it('does not resurrect a deleted conversation draft while navigating away', async () => {
+  const chat = useChatStore();
+  const id = chat.conversationId;
+  chat.draft = 'Delete this private draft';
+  await chat.flushDraft();
+  backend.storage.mockImplementation((operation) => {
+    if (operation.action === 'delete') drafts.delete(operation.id);
+    return Promise.resolve({ items: [], nextCursor: null });
+  });
+  expect(await chat.deleteConversation(id)).toBe(true);
+  expect(drafts.has(id)).toBe(false);
+});
+it('uses the project model and keeps a failed reply when regenerating', async () => {
+  const projectId = '11111111-1111-4111-8111-111111111111';
+  backend.storage.mockImplementation((operation) => {
+    if (operation.action === 'get')
+      return Promise.resolve({
+        ...conversation('saved'),
+        id: 'saved',
+        projectId,
+        messages: [
+          {
+            id: 'user',
+            role: 'user',
+            text: 'Hi',
+            status: 'completed',
+          },
+          {
+            id: 'failed',
+            role: 'assistant',
+            text: 'Broke',
+            status: 'error',
+          },
+        ],
+      });
+    if (operation.action === 'project.get')
+      return Promise.resolve({
+        id: projectId,
+        name: 'Atlas',
+        directoryId: null,
+        instructions: '',
+        preferredProvider: 'anthropic',
+        preferredModel: 'claude-test',
+        defaultMode: 'plan',
+        pinned: false,
+        archived: false,
+        updatedAt: 1,
+      });
+    return Promise.resolve({ items: [], nextCursor: null });
+  });
+  const chat = useChatStore();
+  await chat.selectConversation('saved');
+  chat.draft = 'Again';
+  await chat.send();
+  const sent = backend.start.mock.calls[0]?.[0] as GenerationInput;
+  expect(sent.connectionId).toBe('anthropic');
+  expect(sent.modelId).toBe('claude-test');
+});
+it('keeps the failed assistant and links the new reply to it', async () => {
+  const chat = useChatStore();
+  chat.messages = [
+    { id: 'user', role: 'user', text: 'Hi', status: 'completed' },
+    { id: 'failed', role: 'assistant', text: 'Broke', status: 'error' },
+  ];
+  await chat.regenerate('failed');
+  expect(chat.messages.some((message) => message.id === 'failed')).toBe(true);
+  expect(chat.visible().some((message) => message.id === 'failed')).toBe(false);
+  const retry = backend.start.mock.calls[0]?.[0] as GenerationInput;
+  expect(retry.messages.some((message) => message.parentId === 'failed')).toBe(
+    true,
+  );
 });

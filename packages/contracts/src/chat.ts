@@ -1,49 +1,27 @@
 import { z } from 'zod';
-export const connectionKinds = [
-  'chatgpt',
-  'openai',
-  'claude-client',
-  'anthropic',
-  'google',
-  'xai',
-] as const;
-export const connectionKindSchema = z.enum(connectionKinds);
-export type ConnectionKind = z.infer<typeof connectionKindSchema>;
+import { connectionKindSchema } from './connection';
+import {
+  generationSettingsSchema,
+  modelCapabilitiesSchema,
+} from './generation';
+import { chatMessageSchema, type ChatMessage } from './messages';
+export * from './connection';
 export const appErrorSchema = z
   .object({ code: z.string(), message: z.string() })
   .strict();
 export type AppError = z.infer<typeof appErrorSchema>;
-export const connectionSchema = z
-  .object({
-    id: connectionKindSchema,
-    label: z.string(),
-    provider: z.enum(['openai', 'anthropic', 'google', 'xai']),
-    method: z.enum(['subscription', 'api-key', 'official-client']),
-    configured: z.boolean(),
-    status: z.enum(['disconnected', 'checking', 'connected', 'unavailable']),
-    storage: z.enum(['secure', 'session', 'client', 'none']),
-    account: z.string().nullable(),
-    executable: z.string().nullable(),
-  })
-  .strict();
-export type ConnectionSummary = z.infer<typeof connectionSchema>;
 export const modelSchema = z
   .object({
     id: z.string().min(1),
     name: z.string(),
     verified: z.boolean(),
     available: z.boolean(),
+    capabilities: modelCapabilitiesSchema.optional(),
   })
   .strict();
 export type ChatModel = z.infer<typeof modelSchema>;
-export const textMessageSchema = z
-  .object({
-    id: z.string().min(1).max(128),
-    role: z.enum(['user', 'assistant']),
-    text: z.string(),
-  })
-  .strict();
-export type TextMessage = z.infer<typeof textMessageSchema>;
+export const textMessageSchema = chatMessageSchema;
+export type TextMessage = ChatMessage;
 export const generationSchema = z
   .object({
     generationId: z.string().min(1).max(128),
@@ -51,6 +29,7 @@ export const generationSchema = z
     connectionId: connectionKindSchema,
     modelId: z.string().min(1).max(256),
     messages: z.array(textMessageSchema).min(1).max(1000),
+    settings: generationSettingsSchema.optional(),
   })
   .strict();
 export type GenerationInput = z.infer<typeof generationSchema>;
@@ -73,14 +52,6 @@ export const streamEventSchema = z.discriminatedUnion('type', [
     .strict(),
 ]);
 export type ChatEvent = z.infer<typeof streamEventSchema>;
-export const connectionLabels: Record<ConnectionKind, string> = {
-  chatgpt: 'ChatGPT plan',
-  openai: 'OpenAI API',
-  'claude-client': 'Claude plan',
-  anthropic: 'Anthropic API',
-  google: 'Google Gemini',
-  xai: 'xAI Grok',
-};
 export function toAppError(value: unknown): AppError {
   const parsed = appErrorSchema.safeParse(value);
   return parsed.success

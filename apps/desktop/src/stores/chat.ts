@@ -1,254 +1,140 @@
 import { defineStore } from 'pinia';
 import { ref, computed, onScopeDispose } from 'vue';
+import { z } from 'zod';
 import {
+  attachmentReferenceSchema,
+  generationControlFlags,
+  resolveSelection,
   toAppError,
-  MAX_MESSAGE_BYTES,
   type AppError,
-  type ChatEvent,
+  type AttachmentReference,
   type SavedMessage,
-  conversationSummarySchema,
-  type ConversationSummary,
 } from '@harness/contracts';
 import { useConnectionsStore } from './connections';
 import { useBackend } from '../transport/backend';
 import { useSettingsStore } from './settings';
-import { z } from 'zod';
+import { conversationHistory } from './history';
+import { conversationNavigation } from './chat-navigation';
+import { visibleMessages } from './conversation';
 import {
-  loadConversation,
-  copyConversationExport,
-  chatContext,
-} from './conversation';
+  type ConversationMeta,
+  resolveActiveSelection,
+} from './chat-selection';
+import { createChatSession } from './chat-session';
+import { messageVariants } from './chat-variants';
+import {
+  applyRetentionPolicy,
+  exportConversationFile,
+  importConversationFile,
+  storeAttachment,
+} from './chat-transfer';
 export type ChatMessage = SavedMessage;
 export const useChatStore = defineStore('chat', () => {
   const backend = useBackend();
   const connections = useConnectionsStore();
   const settings = useSettingsStore();
-  const conversations = ref<ConversationSummary[]>([]);
-  const historyLoading = ref(false);
-  let navigation = 0;
+  const history = conversationHistory(backend);
+  const conversations = history.items;
   const messages = ref<ChatMessage[]>([]);
   const draft = ref('');
+  const pending = ref<AttachmentReference[]>([]);
+  const knownAttachments = ref<AttachmentReference[]>([]);
+  const meta = ref<ConversationMeta | null>(null);
   const conversationId = ref<string>(crypto.randomUUID());
   const activeGeneration = ref<string | null>(null);
   const stopping = ref(false);
+  const preparing = ref(false);
   const reconciling = ref(false);
   const error = ref<AppError | null>(null);
-  let dispose: (() => void) | undefined;
-  let sequence = 0;
-  let cancellation: Promise<void> | null = null;
   const active = computed(() => activeGeneration.value !== null);
+  const controls: { stop: () => Promise<void> } = {
+    stop: () => Promise.resolve(),
+  };
+  const navigationState = conversationNavigation({
+    backend,
+    settings,
+    messages,
+    draft,
+    id: conversationId,
+    active,
+    stop: () => controls.stop(),
+    error,
+    refresh: history.refresh,
+    remember: (value) => {
+      meta.value = value;
+    },
+  });
+  const {
+    loading: historyLoading,
+    revision: navigation,
+    newChat,
+    newProjectChat,
+    selectConversation,
+    flushDraft,
+  } = navigationState;
   const canSend = computed(
     () =>
       !active.value &&
       !stopping.value &&
+      !preparing.value &&
       !reconciling.value &&
       !historyLoading.value &&
       connections.ready &&
-      draft.value.trim().length > 0,
+      (draft.value.trim().length > 0 || pending.value.length > 0),
   );
-  function finish(status: ChatMessage['status']) {
-    const message = messages.value.find(
-      (message) => message.id === activeGeneration.value,
-    );
-    if (message) message.status = status;
-    dispose?.();
-    dispose = undefined;
-    activeGeneration.value = null;
-    if (!cancellation) stopping.value = false;
-    void refreshHistory().catch((cause: unknown) => {
-      error.value = toAppError(cause);
-    });
-  }
-  function receive(event: ChatEvent) {
-    if (
-      event.generationId !== activeGeneration.value ||
-      event.conversationId !== conversationId.value ||
-      event.sequence < sequence
-    )
-      return;
-    if (event.sequence !== sequence) {
-      error.value = {
-        code: 'UNAVAILABLE',
-        message:
-          'The response stream lost its order. Stop and resend your message.',
-      };
-      void backend.cancel(event.generationId).catch(() => undefined);
-      finish('error');
-      return;
-    }
-    sequence++;
-    const message = messages.value.find(
-      (message) => message.id === event.generationId,
-    );
-    if (!message) return;
-    if (event.type === 'text') message.text += event.text;
-    else if (event.type === 'done') {
-      if (event.status === 'completed' && connections.model)
-        connections.model.verified = true;
-      finish(event.status === 'completed' ? 'completed' : 'stopped');
-    } else {
-      error.value = event.error;
-      connections.failModel(event.error.code);
-      finish('error');
-    }
-  }
-  async function send() {
-    if (!canSend.value) return;
-    const request = navigation;
-    const generationId = crypto.randomUUID();
-    const user: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      text: draft.value.trim(),
-      status: 'completed',
+  function selection() {
+    const global = {
+      provider: connections.selected,
+      model: connections.modelId || settings.settings.selectedModel,
+      mode: settings.settings.selectedMode,
     };
-    const context = chatContext(messages.value, user);
-    const input = {
-      generationId,
-      conversationId: conversationId.value,
-      connectionId: connections.selected,
-      modelId: connections.modelId,
-      messages: context,
-    };
-    if (
-      new TextEncoder().encode(JSON.stringify(input)).byteLength >
-      MAX_MESSAGE_BYTES - 16384
-    ) {
-      error.value = {
-        code: 'INVALID_REQUEST',
-        message: 'This conversation is too large. Start a new chat.',
-      };
-      return;
-    }
-    messages.value.push(user, {
-      id: generationId,
-      role: 'assistant',
-      text: '',
-      status: 'streaming',
-      modelName: connections.model?.name ?? input.modelId,
-      connectionId: input.connectionId,
-    });
-    const submittedDraft = draft.value;
-    draft.value = '';
-    error.value = null;
-    activeGeneration.value = generationId;
-    sequence = 0;
-    try {
-      const cleanup = await backend.start(input, receive);
-      if (conversationId.value === input.conversationId)
-        await settings.patch({ activeConversation: input.conversationId });
-      void refreshHistory().catch((cause: unknown) => {
-        error.value = toAppError(cause);
+    if (!meta.value?.projectId)
+      return resolveSelection({
+        conversation: {
+          provider: meta.value?.provider ?? null,
+          model: meta.value?.model ?? null,
+          mode: meta.value?.mode ?? null,
+        },
+        project: {},
+        global,
       });
-      if (activeGeneration.value === generationId) dispose = cleanup;
-      else cleanup();
-    } catch (cause) {
-      if (activeGeneration.value === generationId) {
-        error.value = toAppError(cause);
-        connections.failModel(error.value.code);
-        reconciling.value = true;
-        finish('error');
-        // Reconcile a lost acknowledgement against the authoritative runtime.
-        try {
-          await backend.cancel(generationId);
-          const saved = await loadConversation(backend, input.conversationId);
-          if (
-            conversationId.value !== input.conversationId ||
-            request !== navigation
-          )
-            return;
-          messages.value =
-            saved?.messages ??
-            messages.value.filter(
-              (item) => item.id !== user.id && item.id !== generationId,
-            );
-          if (
-            !saved?.messages.some((item) => item.id === user.id) &&
-            !draft.value
-          )
-            draft.value = submittedDraft;
-        } catch {
-          /* Keep the visible prompt when storage cannot confirm acceptance. */
-        } finally {
-          reconciling.value = false;
-        }
-      }
-    }
+    return resolveActiveSelection({ backend, meta: meta.value, global });
   }
-  function stop(): Promise<void> {
-    if (cancellation) return cancellation;
-    const generation = activeGeneration.value;
-    if (!generation) return Promise.resolve();
-    stopping.value = true;
-    cancellation = (async () => {
-      try {
-        await backend.cancel(generation);
-        if (activeGeneration.value === generation) finish('stopped');
-      } catch (cause) {
-        if (activeGeneration.value === generation) {
-          error.value = toAppError(cause);
-          stopping.value = false;
-        }
-      } finally {
-        stopping.value = false;
-        cancellation = null;
-      }
-    })();
-    return cancellation;
-  }
-  async function newChat() {
-    const request = ++navigation;
-    if (active.value) await stop();
-    if (request !== navigation) return;
-    historyLoading.value = false;
-    if (active.value) return;
-    messages.value = [];
-    draft.value = '';
-    error.value = null;
-    conversationId.value = crypto.randomUUID();
-    await settings.patch({ activeConversation: null });
-  }
-  async function refreshHistory() {
-    conversations.value = z
-      .array(conversationSummarySchema)
-      .parse(await backend.storage({ action: 'list' }));
-  }
-  async function initialize() {
-    const request = navigation;
-    historyLoading.value = true;
-    try {
-      await refreshHistory();
-      const saved = settings.settings.activeConversation;
-      if (saved) await selectConversation(saved);
-    } catch (cause) {
-      error.value = toAppError(cause);
-    } finally {
-      if (request === navigation) historyLoading.value = false;
-    }
-  }
-  async function selectConversation(id: string) {
-    const request = ++navigation;
-    historyLoading.value = true;
-    try {
-      if (active.value) await stop();
-      if (active.value) return;
-      const saved = await loadConversation(backend, id);
-      if (request !== navigation) return;
-      if (!saved) {
-        await refreshHistory();
-        await settings.patch({ activeConversation: null });
-        return;
-      }
-      messages.value = saved.messages;
-      conversationId.value = saved.id;
-      draft.value = '';
-      error.value = null;
-      await settings.patch({ activeConversation: saved.id });
-    } catch (cause) {
-      if (request === navigation) error.value = toAppError(cause);
-    } finally {
-      if (request === navigation) historyLoading.value = false;
-    }
+  const session = createChatSession({
+    backend,
+    messages,
+    draft,
+    pending,
+    conversationId,
+    activeGeneration,
+    stopping,
+    preparing,
+    reconciling,
+    error,
+    historyLoading,
+    revision: navigation,
+    active,
+    canSend,
+    refreshHistory: history.refresh,
+    selection,
+    modelName: (modelId) =>
+      connections.model?.id === modelId
+        ? (connections.model.name ?? modelId)
+        : modelId,
+    failModel: (code) => connections.failModel(code),
+    markVerified: () => {
+      if (connections.model) connections.model.verified = true;
+    },
+    rememberActive: (id) => settings.patch({ activeConversation: id }),
+  });
+  controls.stop = () => session.stop();
+  const imagesHeld = computed(
+    () =>
+      pending.value.some((item) => item.mediaType.startsWith('image/')) &&
+      !generationControlFlags(connections.model?.capabilities).vision,
+  );
+  function visible() {
+    return visibleMessages(messages.value);
   }
   async function attempt(operation: () => Promise<void>) {
     try {
@@ -259,43 +145,152 @@ export const useChatStore = defineStore('chat', () => {
       return false;
     }
   }
-  function updateConversation(id: string, title: string, pinned: boolean) {
-    return attempt(async () => {
-      await backend.storage({
-        action: 'update',
-        id,
-        title: title.trim(),
-        pinned,
-      });
-      await refreshHistory();
-    });
+  async function attach(file: File) {
+    if (pending.value.length >= 8) {
+      error.value = {
+        code: 'INVALID_REQUEST',
+        message: 'A message can include up to 8 attachments.',
+      };
+      return false;
+    }
+    try {
+      const stored = await storeAttachment(backend, file);
+      if (!pending.value.some((item) => item.id === stored.id))
+        pending.value.push(stored);
+      if (!knownAttachments.value.some((item) => item.id === stored.id))
+        knownAttachments.value.push(stored);
+      error.value = null;
+      return true;
+    } catch (cause) {
+      error.value = toAppError(cause);
+      return false;
+    }
   }
-  async function deleteConversation(id: string) {
-    if (id === conversationId.value && active.value) await stop();
-    if (id === conversationId.value && active.value) return false;
-    return attempt(async () => {
-      await backend.storage({ action: 'delete', id });
-      if (id === conversationId.value) await newChat();
-      await refreshHistory();
-    });
-  }
-  function exportConversation(id: string) {
-    return attempt(() => copyConversationExport(backend, id));
-  }
-  function dismissError() {
-    error.value = null;
-  }
-  onScopeDispose(() => {
-    if (activeGeneration.value)
-      void backend.cancel(activeGeneration.value).catch(() => undefined);
-    dispose?.();
+  const variants = messageVariants({
+    messages,
+    pending,
+    draft,
+    active,
+    ready: () => connections.ready,
+    unavailable: () => {
+      error.value = {
+        code: 'MODEL_UNAVAILABLE',
+        message: 'Select a model before trying that again.',
+      };
+    },
+    deliver: (plan) => session.deliver(plan),
   });
-  // Group the public state and actions for the application shell.
-  // prettier-ignore
+  async function loadAttachments() {
+    const ids = [
+      ...new Set(
+        messages.value.flatMap((message) => message.attachmentIds ?? []),
+      ),
+    ].filter((id) => !knownAttachments.value.some((item) => item.id === id));
+    if (!ids.length) return;
+    const found = z.array(attachmentReferenceSchema).parse(
+      await backend.storage({
+        action: 'attachment.meta',
+        ids: ids.slice(0, 64),
+      }),
+    );
+    knownAttachments.value.push(...found);
+  }
+  async function importFile(file: File) {
+    const id = await importConversationFile(backend, file);
+    await history.refresh();
+    await selectConversation(id);
+  }
+  async function initialize() {
+    const request = navigation.value;
+    historyLoading.value = true;
+    try {
+      await history.refresh();
+      const saved = settings.settings.activeConversation;
+      if (saved) await selectConversation(saved);
+    } catch (cause) {
+      error.value = toAppError(cause);
+    } finally {
+      if (request === navigation.value) historyLoading.value = false;
+    }
+  }
+  onScopeDispose(() => session.dispose());
   return {
-    conversations, historyLoading, messages, draft, conversationId,
-    activeGeneration, active, stopping, error, canSend,
-    initialize, refreshHistory, selectConversation, updateConversation,
-    deleteConversation, exportConversation, send, stop, newChat, dismissError,
+    conversations,
+    historyQuery: history.query,
+    historyFilter: history.filter,
+    filterHistory: history.setFilter,
+    historyPaging: history.loading,
+    historyError: history.error,
+    historyHasMore: history.hasMore,
+    searchHistory: history.search,
+    loadMoreHistory: history.loadMore,
+    historyLoading,
+    messages,
+    visible,
+    draft,
+    pending,
+    knownAttachments,
+    imagesHeld,
+    conversationId,
+    activeGeneration,
+    active,
+    stopping,
+    error,
+    canSend,
+    meta,
+    selection,
+    initialize,
+    flushDraft,
+    refreshHistory: history.refresh,
+    selectConversation,
+    newProjectChat,
+    updateConversation: (id: string, title: string, pinned: boolean) =>
+      attempt(async () => {
+        await backend.storage({
+          action: 'update',
+          id,
+          title: title.trim(),
+          pinned,
+        });
+        await history.refresh();
+      }),
+    deleteConversation: async (id: string) => {
+      if (id === conversationId.value && active.value) await session.stop();
+      if (id === conversationId.value && active.value) return false;
+      return attempt(async () => {
+        await backend.storage({ action: 'delete', id });
+        if (id === conversationId.value) {
+          draft.value = '';
+          pending.value = [];
+          await newChat();
+        }
+        await history.refresh();
+      });
+    },
+    exportConversation: (id: string) =>
+      attempt(() => exportConversationFile(backend, id)),
+    importConversation: (file: File) =>
+      attempt(async () => {
+        await importFile(file);
+      }),
+    applyRetention: () =>
+      attempt(async () => {
+        await applyRetentionPolicy(backend, conversationId.value);
+        await history.refresh();
+      }),
+    attach,
+    removeAttachment: (id: string) => {
+      pending.value = pending.value.filter((item) => item.id !== id);
+    },
+    loadAttachments,
+    editMessage: variants.editMessage,
+    regenerate: variants.regenerate,
+    retry: variants.retry,
+    send: () => session.send(),
+    stop: () => session.stop(),
+    newChat,
+    dismissError: () => {
+      error.value = null;
+    },
   };
 });

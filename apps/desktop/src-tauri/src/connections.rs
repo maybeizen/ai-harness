@@ -1,4 +1,10 @@
-use crate::{credentials::SecureStore, error::AppError, oauth::tokens::Tokens};
+use crate::{
+    connection_catalog::summary,
+    credentials::SecureStore,
+    endpoint::{discovery_auth, requires_api_key, validate_endpoint},
+    error::AppError,
+    oauth::tokens::Tokens,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -8,19 +14,30 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-pub const IDS: [&str; 6] = [
+pub const IDS: [&str; 10] = [
     "chatgpt",
     "openai",
     "claude-client",
     "anthropic",
     "google",
     "xai",
+    "openrouter",
+    "ollama",
+    "lmstudio",
+    "custom",
 ];
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Record {
     pub account: Option<String>,
     pub executable: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default = "keyed_by_default")]
+    pub has_secret: bool,
+}
+fn keyed_by_default() -> bool {
+    true
 }
 #[derive(Serialize, Deserialize)]
 struct Metadata {
@@ -90,11 +107,17 @@ impl Connections {
     pub fn summaries(&self) -> Result<Value, AppError> {
         let metadata = self.metadata.lock().map_err(|_| AppError::internal())?;
         let session = self.session.lock().map_err(|_| AppError::internal())?;
-        Ok(Value::Array(IDS.iter().map(|id|{
-   let transient=session.get(*id);let record=transient.map(|v|&v.0).or_else(||metadata.records.get(*id));let configured=record.is_some();
-   let (label,provider,method)=match *id{"chatgpt"=>("ChatGPT plan","openai","subscription"),"openai"=>("OpenAI API","openai","api-key"),"claude-client"=>("Claude plan","anthropic","official-client"),"anthropic"=>("Anthropic API","anthropic","api-key"),"google"=>("Google Gemini","google","api-key"),_=>("xAI Grok","xai","api-key")};
-   json!({"id":id,"label":label,"provider":provider,"method":method,"configured":configured,"status":if configured{"checking"}else{"disconnected"},"storage":if !configured{"none"}else if *id=="claude-client"{"client"}else if transient.is_some(){"session"}else{"secure"},"account":record.and_then(|r|r.account.as_ref()),"executable":record.and_then(|r|r.executable.as_ref())})
-  }).collect()))
+        Ok(Value::Array(
+            IDS.iter()
+                .map(|id| {
+                    let transient = session.get(*id);
+                    let record = transient
+                        .map(|value| &value.0)
+                        .or_else(|| metadata.records.get(*id));
+                    summary(id, record, transient.is_some())
+                })
+                .collect(),
+        ))
     }
     pub async fn save(
         &self,
@@ -104,13 +127,30 @@ impl Connections {
         session_only: bool,
     ) -> Result<(), AppError> {
         Self::validate(id)?;
+        if secret.is_empty() && requires_api_key(id) {
+            return Err(AppError::new(
+                "INVALID_REQUEST",
+                "Enter a valid API key for an API connection.",
+            ));
+        }
+        let mut stored = record;
+        if id == "custom" && stored.base_url.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(AppError::new(
+                "INVALID_REQUEST",
+                "Enter an HTTP or HTTPS endpoint without credentials.",
+            ));
+        }
+        if let Some(url) = stored.base_url.clone() {
+            stored.base_url = Some(validate_endpoint(&url)?);
+        }
+        stored.has_secret = !secret.is_empty();
         if session_only {
             self.session
                 .lock()
                 .map_err(|_| AppError::internal())?
-                .insert(id.into(), (record, secret));
+                .insert(id.into(), (stored, secret));
         } else {
-            if id != "claude-client" {
+            if stored.has_secret {
                 tokio::time::timeout(
                     std::time::Duration::from_secs(10),
                     self.store.put(id, &secret),
@@ -122,7 +162,7 @@ impl Connections {
                 .lock()
                 .map_err(|_| AppError::internal())?
                 .records
-                .insert(id.into(), record);
+                .insert(id.into(), stored);
             self.persist()?;
             self.session
                 .lock()
@@ -168,7 +208,17 @@ impl Connections {
                 .ok_or_else(AppError::auth)?;
             return Ok(json!({"connectionId":id,"executable":executable}));
         }
-        let secret = self.secret(id).await?;
+        let record = self.stored(id)?;
+        let in_session = self
+            .session
+            .lock()
+            .map_err(|_| AppError::internal())?
+            .contains_key(id);
+        let secret = if in_session || record.has_secret {
+            self.secret(id).await?
+        } else {
+            String::new()
+        };
         let credential = if id == "chatgpt" {
             let mut tokens: Tokens = serde_json::from_str(&secret).map_err(|_| AppError::auth())?;
             if tokens.expires_at <= crate::oauth::tokens::now() + 60 {
@@ -182,7 +232,7 @@ impl Connections {
                     id,
                     Record {
                         account: tokens.email.clone(),
-                        executable: None,
+                        ..Default::default()
                     },
                     serde_json::to_string(&tokens).map_err(|_| AppError::internal())?,
                     session_only,
@@ -193,7 +243,32 @@ impl Connections {
         } else {
             secret
         };
-        Ok(json!({"connectionId":id,"credential":credential}))
+        let record = self.stored(id)?;
+        if credential.is_empty() && requires_api_key(id) {
+            return Err(AppError::auth());
+        }
+        let base = match record.base_url.as_deref() {
+            Some(url) => Some(validate_endpoint(url)?),
+            None => None,
+        };
+        Ok(discovery_auth(id, &credential, base.as_deref()))
+    }
+    fn stored(&self, id: &str) -> Result<Record, AppError> {
+        if let Some((record, _)) = self
+            .session
+            .lock()
+            .map_err(|_| AppError::internal())?
+            .get(id)
+        {
+            return Ok(record.clone());
+        }
+        self.metadata
+            .lock()
+            .map_err(|_| AppError::internal())?
+            .records
+            .get(id)
+            .cloned()
+            .ok_or_else(AppError::auth)
     }
     pub async fn disconnect(&self, id: &str) -> Result<(), AppError> {
         Self::validate(id)?;
@@ -202,8 +277,9 @@ impl Connections {
             .lock()
             .map_err(|_| AppError::internal())?
             .records
-            .contains_key(id);
-        if persistent && id != "claude-client" {
+            .get(id)
+            .is_some_and(|record| id != "claude-client" && record.has_secret);
+        if persistent {
             self.store.delete(id).await?;
         }
         self.session

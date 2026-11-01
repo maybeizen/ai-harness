@@ -1,13 +1,18 @@
+import type { Workstation } from '../workstation/service';
+import type { TerminalService } from '../terminal/service';
 import {
   runtimeOperationSchema,
   PROTOCOL_VERSION,
-  type GenerationInput,
   type ChatModel,
   type AppError,
 } from '@harness/contracts';
 import { providerError, ProviderFailure } from '@harness/providers';
-import type { ChatService, RuntimeAuth } from '../chat/service';
+import type { ChatService } from '../chat/service';
 import { storageFailure, type Repository } from '../storage/repository';
+import type { Workspaces } from '../workspaces/service';
+import type { AgentService } from '../agent/service';
+import { AgentFailure } from '../agent/permissions';
+import { streamGeneration } from './generation';
 interface Task {
   controller: AbortController;
   conversationId: string;
@@ -22,6 +27,10 @@ export class RuntimeServer {
     private service: ChatService,
     private send: (value: unknown) => Promise<void>,
     private repository?: Repository,
+    private workspaces?: Workspaces,
+    private agents?: AgentService,
+    private terminals?: TerminalService,
+    private workstation?: Workstation,
   ) {}
   async handle(line: string): Promise<boolean> {
     let raw: unknown;
@@ -69,7 +78,54 @@ export class RuntimeServer {
         return false;
       }
       if (this.closing) throw new Error('Closing');
-      if (request.method === 'storage') {
+      if (request.method === 'terminal') {
+        if (!this.terminals)
+          throw new ProviderFailure({
+            code: 'UNAVAILABLE',
+            message: 'The terminal service is unavailable.',
+          });
+        await this.reply(
+          request.id,
+          true,
+          await this.terminals.dispatch(request.params),
+        );
+      } else if (request.method === 'agent') {
+        if (!this.agents)
+          throw new AgentFailure(
+            'UNAVAILABLE',
+            'Agent services are unavailable.',
+          );
+        await this.reply(
+          request.id,
+          true,
+          await this.agents.dispatch(request.params),
+        );
+      } else if (request.method === 'workspace') {
+        if (!this.workspaces)
+          throw new ProviderFailure({
+            code: 'UNAVAILABLE',
+            message: 'Workspace services are unavailable.',
+          });
+        await this.reply(
+          request.id,
+          true,
+          await this.workspaces.dispatch(request.params),
+        );
+      } else if (request.method === 'workstation') {
+        if (!this.workstation)
+          throw new ProviderFailure({
+            code: 'UNAVAILABLE',
+            message: 'Workstation services are unavailable.',
+          });
+        const busy = [...this.tasks.values()].map(
+          (task) => task.conversationId,
+        );
+        await this.reply(
+          request.id,
+          true,
+          await this.workstation.dispatch(request.params, busy),
+        );
+      } else if (request.method === 'storage') {
         if (!this.repository) throw storageFailure();
         const operation = request.params;
         if (
@@ -143,7 +199,14 @@ export class RuntimeServer {
           controller,
           conversationId: input.conversationId,
           settled: acknowledged
-            .then(() => this.generate(input, auth, controller))
+            .then(() =>
+              streamGeneration(input, auth, controller, {
+                service: this.service,
+                send: this.send,
+                repository: this.repository,
+                catalogs: this.catalogs,
+              }),
+            )
             .finally(() => this.tasks.delete(input.generationId)),
         };
         this.tasks.set(input.generationId, task);
@@ -157,92 +220,16 @@ export class RuntimeServer {
         }
       }
     } catch (error) {
-      await this.reply(request.id, false, undefined, providerError(error));
+      await this.reply(
+        request.id,
+        false,
+        undefined,
+        error instanceof AgentFailure
+          ? { code: error.code, message: error.message }
+          : providerError(error),
+      );
     }
     return false;
-  }
-  private async generate(
-    input: GenerationInput,
-    auth: RuntimeAuth,
-    controller: AbortController,
-  ) {
-    let sequence = 0;
-    let internalFailure = false;
-    let internalCause: unknown;
-    const identity = {
-      generationId: input.generationId,
-      conversationId: input.conversationId,
-    };
-    try {
-      if (!controller.signal.aborted)
-        for await (const text of this.service.stream(input, auth, controller)) {
-          if (controller.signal.aborted) break;
-          try {
-            for (let i = 0; i < text.length; i += 8192) {
-              this.repository?.progress(
-                input,
-                text.slice(i, i + 8192),
-                'streaming',
-              );
-              await this.send({
-                version: PROTOCOL_VERSION,
-                event: {
-                  ...identity,
-                  sequence: sequence++,
-                  type: 'text',
-                  text: text.slice(i, i + 8192),
-                },
-              });
-            }
-          } catch (error) {
-            // Abort before for-await invokes return(): upstream cleanup may await abort.
-            internalFailure = true;
-            internalCause = error;
-            controller.abort();
-            throw error;
-          }
-        }
-      this.repository?.progress(
-        input,
-        '',
-        controller.signal.aborted ? 'stopped' : 'completed',
-      );
-      await this.send({
-        version: PROTOCOL_VERSION,
-        event: {
-          ...identity,
-          sequence: sequence++,
-          type: 'done',
-          status: controller.signal.aborted ? 'cancelled' : 'completed',
-        },
-      });
-    } catch (error) {
-      let detail = providerError(internalFailure ? internalCause : error);
-      let cancelled = controller.signal.aborted && !internalFailure;
-      try {
-        this.repository?.progress(input, '', cancelled ? 'stopped' : 'error');
-      } catch (failure) {
-        detail = providerError(failure);
-        cancelled = false;
-      }
-      if (cancelled) {
-        await this.send({
-          version: PROTOCOL_VERSION,
-          event: { ...identity, sequence, type: 'done', status: 'cancelled' },
-        });
-      } else {
-        if (detail.code === 'MODEL_UNAVAILABLE') {
-          const model = this.catalogs
-            .get(input.connectionId)
-            ?.find((model) => model.id === input.modelId);
-          if (model) model.available = false;
-        }
-        await this.send({
-          version: PROTOCOL_VERSION,
-          event: { ...identity, sequence, type: 'error', error: detail },
-        });
-      }
-    }
   }
 
   private reply(id: string, ok: boolean, result?: unknown, error?: AppError) {
@@ -256,6 +243,9 @@ export class RuntimeServer {
   async close() {
     this.closing = true;
     for (const task of this.tasks.values()) task.controller.abort();
+    await this.terminals?.close();
+    await this.agents?.close();
+    await this.workspaces?.close();
     await Promise.allSettled(
       [...this.tasks.values()].map((task) => task.settled),
     );

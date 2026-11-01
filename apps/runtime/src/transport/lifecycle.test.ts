@@ -22,7 +22,10 @@ beforeAll(async () => {
         name: 'native',
         setup(builder) {
           builder.onResolve(
-            { filter: /^(better-sqlite3|@anthropic-ai\/claude-agent-sdk)$/ },
+            {
+              filter:
+                /^(better-sqlite3|node-pty|@anthropic-ai\/claude-agent-sdk)$/,
+            },
             ({ path }) => ({
               path: require.resolve(path),
               external: true,

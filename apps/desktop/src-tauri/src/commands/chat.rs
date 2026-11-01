@@ -1,50 +1,18 @@
+use super::message_wire::{validate_generation, GenerationInput};
 use crate::{
     bridge::Sink,
     error::AppError,
     protocol::{self, StreamEvent},
     state::{call, AppState},
 };
-use serde::{Deserialize, Serialize};
 use serde_json::json;
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GenerationInput {
-    generation_id: String,
-    conversation_id: String,
-    connection_id: String,
-    model_id: String,
-    messages: Vec<TextMessage>,
-}
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct TextMessage {
-    id: String,
-    role: String,
-    text: String,
-}
 #[tauri::command]
 pub async fn start_chat(
     input: GenerationInput,
     channel: tauri::ipc::Channel<StreamEvent>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), AppError> {
-    if input.generation_id.is_empty()
-        || input.generation_id.len() > 128
-        || input.conversation_id.is_empty()
-        || input.conversation_id.len() > 128
-        || input.messages.is_empty()
-        || input.messages.len() > 1000
-        || input.model_id.is_empty()
-        || input
-            .messages
-            .iter()
-            .any(|m| !["user", "assistant"].contains(&m.role.as_str()))
-    {
-        return Err(AppError::new(
-            "INVALID_REQUEST",
-            "Invalid conversation request.",
-        ));
-    }
+    validate_generation(&input)?;
     if serde_json::to_vec(&input)
         .map_err(|_| AppError::internal())?
         .len() as u64

@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod bridge;
 mod commands;
+mod connection_catalog;
 mod connections;
 mod credentials;
+mod endpoint;
 mod error;
 mod oauth;
 mod protocol;
@@ -13,7 +15,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 #[tauri::command]
 async fn runtime_health(
     app: tauri::AppHandle,
@@ -26,7 +28,9 @@ async fn runtime_health(
     .await
     .map_err(|_| error::AppError::internal())?
     .map_err(|_| error::AppError::internal())?;
-    if std::env::var_os("HARNESS_SMOKE_DATA").is_some() {
+    if std::env::var_os("HARNESS_SMOKE_DATA").is_some()
+        && std::env::var_os("HARNESS_RESTART_STAGE").is_none()
+    {
         eprintln!("HARNESS_SMOKE_RENDERER_READY");
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(1));
@@ -38,6 +42,8 @@ async fn runtime_health(
 fn main() {
     let application = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let resources = app.path().resource_dir()?;
             let (node, script) = if cfg!(debug_assertions) {
@@ -69,7 +75,13 @@ fn main() {
                 }
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_secs(20));
+                    std::thread::sleep(Duration::from_secs(
+                        if std::env::var("HARNESS_RESTART_STAGE").ok().as_deref() == Some("live") {
+                            300
+                        } else {
+                            30
+                        },
+                    ));
                     handle.exit(1);
                 });
             }
@@ -89,7 +101,17 @@ fn main() {
                 pending_oauth: Mutex::new(None),
                 oauth_gate: tokio::sync::Mutex::new(()),
             });
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = commands::window::restore_saved(app.handle());
+                let _ = window.show();
+            }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.emit("app-close-requested", ());
+            }
         })
         .invoke_handler(tauri::generate_handler![
             runtime_health,
@@ -104,7 +126,28 @@ fn main() {
             commands::chat::cancel_chat,
             commands::chat::open_external,
             commands::chat::copy_text,
-            commands::storage::storage_operation
+            commands::storage::storage_operation,
+            commands::lifecycle::complete_close,
+            commands::lifecycle::request_close,
+            commands::lifecycle::qualification_stage,
+            commands::lifecycle::qualification_result,
+            commands::lifecycle::qualification_error,
+            commands::lifecycle::qualification_live_report,
+            commands::background::import_background,
+            commands::background::read_background,
+            commands::background::remove_background,
+            commands::workspace::open_workspace,
+            commands::workspace::workspace_operation,
+            commands::agent::start_agent,
+            commands::agent::resume_agent,
+            commands::agent::agent_operation,
+            commands::terminal::create_terminal,
+            commands::terminal::terminal_operation,
+            commands::window::restore_window,
+            commands::window::capture_window,
+            commands::workstation::workstation_operation,
+            commands::notify::show_notification,
+            commands::voice::transcribe_voice
         ])
         .build(tauri::generate_context!())
         .expect("Application initialization failed");

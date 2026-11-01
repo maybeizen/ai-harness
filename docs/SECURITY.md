@@ -20,25 +20,20 @@ Persistence implementations must use parameterized SQL, transactional migrations
 
 Choose SQLite durability explicitly. WAL improves concurrency but does not by itself promise that the most recent transaction survives power loss. Use `synchronous = FULL` for durable message commits and document any batching interval. See [SQLite synchronous settings](https://sqlite.org/pragma.html#pragma_synchronous).
 
-## Requirements before enabling agent tools
+## Agent, terminal, and MCP controls
 
-Filesystem, shell, Git mutation, terminal, and MCP operations are not currently authorized by the conversational chat interface. Future implementations must enforce all of the following outside model control:
+Tool arguments are validated outside model control. Workspace paths are canonicalized. Traversal, symlink escapes, and sensitive files are denied. File size, output size, execution time, and concurrency have explicit limits. Approvals bind the exact operation, session, workspace, argument hash, and expiry, and they are single use. A changed or replayed request is denied. External edits are detected by content hash before a patch replaces a file, and rollback refuses a file that changed again.
 
-- Validate each tool's arguments and reject unsupported operations.
-- Resolve workspace boundaries and target paths, including symlink handling and creation through validated parent directories.
-- Protect sensitive files and enforce file-size, output-size, execution-time, and concurrency limits.
-- Bind approvals to exact arguments, workspace, session, and expiry; reject replayed or changed requests.
-- Require approval for commands and destructive effects according to the selected policy. Ask and Plan modes cannot become read-only merely by labelling unrestricted shell access as safe.
-- Detect external file changes before replacing content and provide safe review and rollback.
-- Cancel descendant processes and release resources when a task ends or the application closes.
-- Write audit metadata without secret values or unnecessary source-file contents.
+Ask and Plan are read-only. Edit can write, edit, delete, and patch. Edit cannot run commands. Agent, Multitask, and Debug run commands only through bubblewrap and fail closed when bubblewrap is unavailable. Review and Security are read-only and require `report_findings`. MCP tools are hidden from Ask, Plan, Review, and Security. MCP calls require manual approval even when the policy is full access. Local stdio starts only inside bubblewrap after that approval. Without approval the runtime returns `PERMISSION_DENIED`. Without an isolated executor it returns `ISOLATION_UNAVAILABLE`. The regression fixtures prove that refusal and that the sentinel process does not start. They do not prove a completed bubblewrap stdio session.
 
-MCP server configuration, tool descriptions, tool results, project instructions, and repository content are untrusted inputs. MCP tools must pass through the same permission enforcement as built-in tools. Remote authentication must validate the intended audience; do not pass unrelated provider credentials to MCP servers. See [MCP authorization security considerations](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/basic/authorization/security-considerations.mdx).
+The interactive user terminal is a shell in the selected directory. It is not a filesystem sandbox. A working directory is not isolation. The supervised Node runtime still runs with the operating-system user's privileges outside those isolated command paths. It is not a general sandbox.
+
+MCP server configuration, tool descriptions, tool results, project instructions, and repository content are untrusted inputs. Remote MCP authentication must validate the intended audience. Unrelated provider credentials are not forwarded to MCP servers. See [MCP authorization security considerations](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/basic/authorization/security-considerations.mdx).
 
 ## Maintenance and verification
 
 Keep capability scope narrow and retain native checks as functionality expands. See [Tauri runtime authority](https://v2.tauri.app/security/runtime-authority/). Custom provider endpoints must not forward credentials across redirects or to URLs supplied by model output.
 
-The initial architecture inspection is not a penetration test or an exhaustive vulnerability assessment. Real SQLite reopen/recovery, malformed records, failed writes, private database permissions, early cancellation and upstream cleanup now have deterministic regression coverage. Outstanding qualification includes abrupt-process-kill durability, full native immediate-close preference flushing, authenticated providers and future tool permission regression tests. Run the documented test and build gates, inspect diffs for secrets, and use deterministic fixtures without personal credentials.
+The initial architecture inspection is not a penetration test or an exhaustive vulnerability assessment. Real SQLite reopen/recovery, malformed records, failed writes, private database permissions, early cancellation, upstream cleanup, workspace boundaries, approvals, and bubblewrap fail-closed command tests now have deterministic regression coverage. Outstanding qualification includes abrupt host-kill durability, a native two-launch restart, live provider calls, Gemini CLI account sign-in, other operating systems, and packaged-app smoke. Run the documented test and build gates, inspect diffs for secrets, and use deterministic fixtures without personal credentials.
 
 Production dependency audit initially found a vulnerable DOMPurify copy beneath Monaco. The workspace override pins all copies to patched 3.4.17; the subsequent production audit reported no known vulnerabilities. This dependency check is not a full vulnerability assessment.

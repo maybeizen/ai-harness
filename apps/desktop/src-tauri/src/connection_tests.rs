@@ -108,3 +108,70 @@ async fn failed_secure_storage_does_not_silently_fall_back() {
         .contains("openai"));
     std::fs::remove_dir_all(path).unwrap();
 }
+#[tokio::test]
+async fn keeps_legacy_provider_records_and_rejects_credential_urls() {
+    let path = directory();
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(
+        path.join("connections.json"),
+        r#"{"host_id":"urn:uuid:fixture","records":{"openai":{"account":"account-fixture","executable":null}}}"#,
+    )
+    .unwrap();
+    let store = Arc::new(FakeStore::default());
+    store.put("openai", "fixture-secret-key").await.unwrap();
+    let connections = Connections::new(path.clone(), store).unwrap();
+    let client = reqwest::Client::new();
+    let auth = connections.auth("openai", &client).await.unwrap();
+    assert_eq!(auth["credential"], "fixture-secret-key");
+    assert!(auth.get("baseURL").is_none());
+    assert!(!std::fs::read_to_string(path.join("connections.json"))
+        .unwrap()
+        .contains("fixture-secret-key"));
+    connections
+        .save(
+            "ollama",
+            Record {
+                base_url: Some("http://127.0.0.1:11434/v1".into()),
+                ..Default::default()
+            },
+            String::new(),
+            false,
+        )
+        .await
+        .unwrap();
+    let local = connections.auth("ollama", &client).await.unwrap();
+    assert!(local.get("credential").is_none());
+    assert_eq!(local["baseURL"], "http://127.0.0.1:11434/v1");
+    assert_eq!(
+        connections
+            .save(
+                "custom",
+                Record {
+                    base_url: Some("http://user:secret@127.0.0.1/v1".into()),
+                    ..Default::default()
+                },
+                String::new(),
+                false,
+            )
+            .await
+            .unwrap_err()
+            .code,
+        "INVALID_REQUEST"
+    );
+    assert!(crate::endpoint::validate_endpoint("http://127.0.0.1:9/v1?api_key=secret").is_err());
+    assert_eq!(
+        crate::endpoint::prepare_base_url("openai", Some("https://evil.invalid"))
+            .unwrap_err()
+            .code,
+        "INVALID_REQUEST"
+    );
+    let rows = connections.summaries().unwrap();
+    let list = rows.as_array().unwrap();
+    assert!(list
+        .iter()
+        .any(|row| row["id"] == "openai" && row["configured"] == true));
+    assert!(list
+        .iter()
+        .any(|row| row["id"] == "ollama" && row["method"] == "endpoint"));
+    std::fs::remove_dir_all(path).unwrap();
+}

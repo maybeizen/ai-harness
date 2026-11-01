@@ -1,15 +1,23 @@
+import { ProjectRepository } from './projects';
+import {
+  deleteConversationRecords,
+  saveConversation,
+} from './conversation-record';
+import { historyPage, legacyHistory } from './history';
+import { outboundMessages, dispatchTransfer } from './transfer';
 import type Database from 'better-sqlite3';
 import {
   conversationSchema,
   settingsSchema,
-  MAX_MESSAGE_BYTES,
   type Conversation,
-  type ConversationSummary,
   type GenerationInput,
   type Settings,
   type StorageOperation,
+  projectOperationSchema,
 } from '@harness/contracts';
 import { ProviderFailure } from '@harness/providers';
+import { instructionContext } from '../agent/project-context';
+import { loadPromptImages } from './prompt-images';
 export function storageFailure() {
   return new ProviderFailure({
     code: 'STORAGE_ERROR',
@@ -18,7 +26,12 @@ export function storageFailure() {
   });
 }
 export class Repository {
-  constructor(private db: Database.Database) {
+  private projects: ProjectRepository;
+  constructor(
+    private db: Database.Database,
+    private directory?: string,
+  ) {
+    this.projects = new ProjectRepository(db);
     this.guarded(() =>
       this.db.transaction(() => {
         const rows = this.db
@@ -65,61 +78,56 @@ export class Repository {
       return row ? conversationSchema.parse(JSON.parse(row.data)) : null;
     });
   }
+  projectInstructions(id: string): string {
+    return this.guarded(() => instructionContext(this.db, id));
+  }
   private write(conversation: Conversation) {
-    if (conversation.messages.length > 1000)
-      throw new ProviderFailure({
-        code: 'CONTEXT_LIMIT',
-        message:
-          'This conversation has reached its message limit. Start a new chat.',
-      });
-    const parsed = conversationSchema.parse(conversation);
-    const data = JSON.stringify(parsed);
-    if (Buffer.byteLength(data) > MAX_MESSAGE_BYTES - 32768)
-      throw new ProviderFailure({
-        code: 'CONTEXT_LIMIT',
-        message:
-          'This conversation has reached its storage limit. Start a new chat.',
-      });
-    this.db
-      .prepare(
-        'INSERT INTO conversations(id, updated_at, pinned, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, pinned=excluded.pinned, data=excluded.data',
-      )
-      .run(parsed.id, parsed.updatedAt, Number(parsed.pinned), data);
+    saveConversation(this.db, conversation);
+  }
+  providerMessages(input: GenerationInput, vision: boolean) {
+    return outboundMessages(this.db, this.directory, input, vision);
+  }
+  promptImages(messages: GenerationInput['messages']) {
+    return loadPromptImages(this.db, this.directory, messages);
   }
   dispatch(operation: StorageOperation): unknown {
     return this.guarded(() => {
-      if (operation.action === 'list') {
-        const rows = this.db
-          .prepare(
-            'SELECT id, updated_at, pinned, data FROM conversations ORDER BY pinned DESC, updated_at DESC, id LIMIT 200',
-          )
-          .all() as {
-          id: string;
-          updated_at: number;
-          pinned: number;
-          data: string;
-        }[];
-        return rows.map((row): ConversationSummary => {
-          let title = 'Unreadable conversation';
-          try {
-            const parsed = conversationSchema.safeParse(JSON.parse(row.data));
-            if (parsed.success) title = parsed.data.title;
-          } catch {
-            /* Preserve damaged rows for explicit load errors and recovery. */
-          }
-          return {
-            id: row.id,
-            title,
-            pinned: Boolean(row.pinned),
-            updatedAt: row.updated_at,
-          };
-        });
+      const transferred = dispatchTransfer(this.db, this.directory, operation);
+      if (transferred !== undefined) return transferred;
+      const projectOperation = projectOperationSchema.safeParse(operation);
+      if (projectOperation.success)
+        return this.projects.dispatch(projectOperation.data);
+      if (operation.action === 'draft.get') {
+        const row = this.db
+          .prepare('SELECT text FROM conversation_drafts WHERE id=?')
+          .get(operation.id) as { text: string } | undefined;
+        return row?.text ?? '';
       }
+      if (operation.action === 'draft.set') {
+        if (operation.text)
+          this.db
+            .prepare(
+              'INSERT INTO conversation_drafts(id,text) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET text=excluded.text',
+            )
+            .run(operation.id, operation.text);
+        else
+          this.db
+            .prepare('DELETE FROM conversation_drafts WHERE id=?')
+            .run(operation.id);
+        return null;
+      }
+      if (operation.action === 'history.page')
+        return historyPage(this.db, operation);
+      if (operation.action === 'list') return legacyHistory(this.db);
       if (operation.action === 'get') return this.get(operation.id);
       if (operation.action === 'delete') {
         this.db.transaction(() => {
+          deleteConversationRecords(this.db, operation.id);
           this.db
             .prepare('DELETE FROM conversations WHERE id=?')
+            .run(operation.id);
+          this.db
+            .prepare('DELETE FROM conversation_drafts WHERE id=?')
             .run(operation.id);
           // Deletion must remain possible even when settings need recovery.
           const row = this.db
@@ -148,10 +156,16 @@ export class Repository {
           ...conversation,
           title: operation.title,
           pinned: operation.pinned,
+          ...(operation.provider !== undefined
+            ? { provider: operation.provider }
+            : {}),
+          ...(operation.model !== undefined ? { model: operation.model } : {}),
+          ...(operation.mode !== undefined ? { mode: operation.mode } : {}),
         });
         return null;
       }
       if (operation.action === 'settings.get') return this.settings();
+      if (operation.action !== 'settings.set') throw storageFailure();
       this.setSettings(operation.settings);
       return null;
     });
@@ -173,21 +187,34 @@ export class Repository {
   begin(input: GenerationInput) {
     this.guarded(() =>
       this.db.transaction(() => {
+        const context = input.messages.filter(
+          (message) => message.id !== input.generationId,
+        );
+        const variant = input.messages.find(
+          (message) => message.id === input.generationId,
+        );
         const existing = this.get(input.conversationId);
         const conversation: Conversation = existing ?? {
           id: input.conversationId,
           title: (
-            input.messages
-              .find((message) => message.role === 'user')
-              ?.text.trim() || 'New conversation'
+            context.find((message) => message.role === 'user')?.text.trim() ||
+            'New conversation'
           ).slice(0, 200),
           pinned: false,
           updatedAt: Date.now(),
           messages: [],
         };
+        if (
+          !conversation.messages.length &&
+          conversation.title === 'New conversation'
+        )
+          conversation.title = (
+            context.find((message) => message.role === 'user')?.text.trim() ||
+            'New conversation'
+          ).slice(0, 200);
         const ids = new Set(conversation.messages.map((message) => message.id));
         const incomingIds = new Set<string>();
-        for (const message of input.messages) {
+        for (const message of context) {
           const previous = conversation.messages.find(
             (saved) => saved.id === message.id,
           );
@@ -204,7 +231,11 @@ export class Repository {
             });
           incomingIds.add(message.id);
           if (!ids.has(message.id)) {
-            conversation.messages.push({ ...message, status: 'completed' });
+            conversation.messages.push({
+              ...message,
+              status: 'completed',
+              createdAt: message.createdAt ?? Date.now(),
+            });
             ids.add(message.id);
           }
         }
@@ -218,11 +249,25 @@ export class Repository {
           role: 'assistant',
           text: '',
           status: 'streaming',
-          modelName: input.modelId,
+          createdAt: Date.now(),
+          modelName: variant?.modelName ?? input.modelId,
           connectionId: input.connectionId,
+          model: variant?.model ?? {
+            connectionId: input.connectionId,
+            modelId: input.modelId,
+            name: variant?.modelName ?? input.modelId,
+          },
+          ...(variant?.parentId ? { parentId: variant.parentId } : {}),
         });
         conversation.updatedAt = Date.now();
         this.write(conversation);
+        const storedDraft = this.db
+          .prepare('SELECT text FROM conversation_drafts WHERE id=?')
+          .get(input.conversationId) as { text: string } | undefined;
+        if (storedDraft?.text.trim() === context.at(-1)?.text)
+          this.db
+            .prepare('DELETE FROM conversation_drafts WHERE id=?')
+            .run(input.conversationId);
       })(),
     );
   }

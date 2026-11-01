@@ -2,6 +2,7 @@
 import type { HTMLAttributes } from 'vue';
 import { useVModel } from '@vueuse/core';
 import { cn, definedProps } from '@/lib/utils';
+import { controlBase } from '../control-styles';
 
 const props = defineProps<{
   class?: HTMLAttributes['class'];
@@ -29,7 +30,8 @@ const modelValue = useVModel(
     v-model="modelValue"
     :class="
       cn(
-        'flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50',
+        controlBase,
+        'flex min-h-[calc(var(--control-height)*2)] px-[var(--control-padding)] py-2',
         props.class,
       )
     "
