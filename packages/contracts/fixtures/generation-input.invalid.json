@@ -1,0 +1,12 @@
+{
+  "generationId": "g1",
+  "conversationId": "c1",
+  "connectionId": "openai",
+  "modelId": "gpt-test",
+  "settings": {
+    "reasoningEffort": "extreme",
+    "temperature": 9,
+    "maxOutputTokens": 0
+  },
+  "messages": [{ "id": "u", "role": "user", "text": "Hi" }]
+}

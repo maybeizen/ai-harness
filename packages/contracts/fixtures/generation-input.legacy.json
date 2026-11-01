@@ -1,0 +1,7 @@
+{
+  "generationId": "g1",
+  "conversationId": "c1",
+  "connectionId": "openai",
+  "modelId": "gpt-test",
+  "messages": [{ "id": "u", "role": "user", "text": "Hi" }]
+}

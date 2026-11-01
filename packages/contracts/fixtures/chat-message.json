@@ -1,0 +1,26 @@
+{
+  "id": "message-1",
+  "role": "assistant",
+  "text": "Hello",
+  "createdAt": 1760000000000,
+  "reasoning": "Checked the request.",
+  "status": "completed",
+  "model": {
+    "connectionId": "openai",
+    "modelId": "gpt-test",
+    "name": "GPT Test"
+  },
+  "parentId": "message-0",
+  "attachmentIds": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ],
+  "tools": [
+    {
+      "callId": "call-1",
+      "name": "read_file",
+      "status": "completed",
+      "ok": true,
+      "output": "contents"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "generationId": "g1",
+  "conversationId": "c1",
+  "connectionId": "openai",
+  "modelId": "gpt-test",
+  "settings": {
+    "reasoningEffort": "low",
+    "temperature": 0.2,
+    "maxOutputTokens": 1024
+  },
+  "messages": [
+    {
+      "id": "message-1",
+      "role": "user",
+      "text": "Hello",
+      "createdAt": 1760000000000,
+      "attachmentIds": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    }
+  ]
+}

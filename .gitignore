@@ -1,0 +1,21 @@
+node_modules/
+.cache/
+dist/
+target/
+coverage/
+playwright-report/
+test-results/
+apps/desktop/src-tauri/resources/
+apps/desktop/src-tauri/binaries/
+*.log
+.env
+.env.*
+!.env.example
+apps/desktop/src-tauri/gen/
+
+# Private conversations and SQLite journals
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.sqlite.backup
